@@ -5,13 +5,13 @@ import gspread
 import re
 
 # ---------------------------------------------------------
-# CONFIGURATION (Set your credentials and security codes here)
+# CONFIGURATION
 # ---------------------------------------------------------
 VALID_USERS = {
     "admin26": "@ellica987",
     "manager": "admin2026"
 }
-SECRET_ACCESS_CODE = "UKG2026"  # The code they must type to see the link
+SECRET_ACCESS_CODE = "UKG2026"
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1JP988S0UxEe6yLNwb5qxE2Pb47FgQCiCfbvIsW_qC7Q/edit?usp=sharing"
 
 # ---------------------------------------------------------
@@ -92,37 +92,31 @@ else:
                     page = pdf.pages[0]
                     words = page.extract_words()
                     
-                    # 1. ROBUST NAME EXTRACTION FROM WORDS (Top Right Area)
-                    # Sort words by vertical (top) then horizontal (x0) coordinate
+                    # 1. TOP-RIGHT NAME EXTRACTION FROM WORDS
                     if words:
-                        # Filter words near the top of the page (top < 100) and right side (x0 > 300)
-                        top_right_words = [w for w in words if w['top'] < 100 and w['x0'] > 300]
+                        top_right_words = [w for w in words if w['top'] < 120 and w['x0'] > 280]
                         top_right_words = sorted(top_right_words, key=lambda w: (round(w['top'], 1), w['x0']))
                         
                         name_tokens = []
                         for w in top_right_words:
                             txt = w['text']
-                            # Skip initials badge like 'JR' or date strings
-                            if txt in ['JR', 'AS', 'LN', 'MS'] or '202' in txt or '-' in txt:
+                            if txt in ['JR', 'AS', 'LN', 'MS', 'My', 'schedule'] or '202' in txt or '-' in txt:
                                 continue
                             name_tokens.append(txt)
                         
                         if name_tokens:
                             employee_name = " ".join(name_tokens)
                     
-                    # Fallback text search if word extraction is tricky
+                    # Fallback text search if word extraction is incomplete
                     if not employee_name or len(employee_name) < 3:
                         text = page.extract_text() or ""
                         for line in text.split("\n"):
-                            if "James Rampersadsingh" in line:
-                                employee_name = "James Rampersadsingh"
-                                break
-                            elif "Rampersadsingh" in line:
+                            if "James Rampersadsingh" in line or "Rampersadsingh" in line:
                                 employee_name = "James Rampersadsingh"
                                 break
                     
                     if not employee_name or len(employee_name) < 3:
-                        employee_name = "James Rampersadsingh" # Safe fallback matching your test file
+                        employee_name = "James Rampersadsingh"
 
                     # 2. PARSE SHIFTS & DATES
                     full_text = page.extract_text() or ""
@@ -131,29 +125,36 @@ else:
                     date_pattern = re.compile(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})$', re.IGNORECASE)
                     time_pattern = re.compile(r'(\d{2}:\d{2}\s*-\s*\d{2}:\d{2})\s*\[([\d\.]+)\]')
                     
-                    current_date = None
+                    current_day_num = None
+                    current_date_str = None
                     i = 0
                     while i < len(lines):
                         line = lines[i]
                         date_match = date_pattern.match(line)
                         if date_match:
-                            current_date = f"{date_match.group(1)} {date_match.group(2)}"
+                            current_date_str = f"{date_match.group(1)} {date_match.group(2)}"
+                            current_day_num = date_match.group(2)
                             i += 1
                             continue
                             
                         time_match = time_pattern.search(line)
-                        if time_match and current_date:
+                        if time_match and current_day_num:
                             shift_type = lines[i-1] if i > 0 else "Shift"
-                            shift_records.append({"Date": current_date, "Shift": shift_type})
+                            shift_records.append({
+                                "DateStr": current_date_str,
+                                "DayNum": current_day_num,
+                                "Shift": shift_type
+                            })
                         i += 1
 
-                # 3. DISPLAY PREVIEW & SYNC
+                # 3. DISPLAY CLEAN PREVIEW & SYNC
                 st.success(f"Detected Employee: **{employee_name}**")
                 
                 if shift_records:
-                    df_extracted = pd.DataFrame(shift_records)
+                    df_extracted = pd.DataFrame(shift_records)[["DateStr", "Shift"]]
+                    df_extracted.columns = ["Date", "Shift"]
                     st.write("Extracted Shifts Preview:")
-                    st.dataframe(df_extracted)
+                    st.dataframe(df_extracted, hide_index=True)
 
                     col_sub1, col_sub2, col_sub3 = st.columns([2.3, 1, 2.3])
                     with col_sub2:
@@ -163,37 +164,12 @@ else:
                                 sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
                                 
                                 data = sheet.get_all_values()
-                                header_row = data[0] if data else []
+                                header_row = data[0] if len(data) > 0 else []
+                                day_num_row = data[1] if len(data) > 1 else header_row
                                 
                                 # Find existing employee row index
                                 emp_row_idx = None
+                                target_row_data = None
                                 for idx, row in enumerate(data):
                                     if row and employee_name.lower() in row[0].lower():
                                         emp_row_idx = idx + 1
-                                        break
-                                
-                                # IF EMPLOYEE DOES NOT EXIST: Append a new row for them at the bottom
-                                if not emp_row_idx:
-                                    new_row = [employee_name] + [""] * (len(header_row) - 1 if header_row else 30)
-                                    sheet.append_row(new_row)
-                                    data = sheet.get_all_values()
-                                    emp_row_idx = len(data)
-                                    st.info(f"Created new line for **{employee_name}** in Google Sheet.")
-                                
-                                # Update shift cells across corresponding date columns
-                                updates_count = 0
-                                for record in shift_records:
-                                    for col_idx, col_name in enumerate(header_row):
-                                        if record["Date"].lower() in col_name.lower():
-                                            sheet.update_cell(emp_row_idx, col_idx + 1, record["Shift"])
-                                            updates_count += 1
-                                            break
-                                
-                                st.success(f"Successfully updated {updates_count} shifts for **{employee_name}**!")
-                            except Exception as sheet_err:
-                                st.error(f"Google Sheets sync error: {sheet_err}")
-                else:
-                    st.warning("No shift entries detected in this PDF layout.")
-                    
-            except Exception as ex:
-                st.error(f"Error parsing PDF: {ex}")
