@@ -107,23 +107,13 @@ else:
                         if name_tokens:
                             employee_name = " ".join(name_tokens)
                     
-                    # Fallback text search if word extraction is incomplete
-                    if not employee_name or len(employee_name) < 3:
-                        text = page.extract_text() or ""
-                        for line in text.split("\n"):
-                            # Check common name patterns or capture words near top right
-                            clean_line = line.strip()
-                            if len(clean_line) > 3 and not "schedule" in clean_line.lower() and not "202" in clean_line:
-                                # Often the name appears standalone near top
-                                pass
-
-                    # If name extraction still couldn't find it automatically, let the user input it safely
+                    # Fallback name input if automatic detection misses
                     if not employee_name or len(employee_name) < 3:
                         employee_name = st.text_input("Could not automatically detect name from PDF. Please type your full name as it appears on the Master Sheet:")
                         if not employee_name:
-                            st.stop() # Wait until user inputs their name
+                            st.stop()
 
-                    # 2. ROBUST SHIFT & DATE PARSER
+                    # 2. BULLETPROOF SHIFT & DATE EXTRACTOR
                     full_text = page.extract_text() or ""
                     lines = [l.strip() for l in full_text.split("\n") if l.strip()]
                     
@@ -132,9 +122,11 @@ else:
                     
                     current_day_num = None
                     current_date_str = None
+                    
                     i = 0
                     while i < len(lines):
                         line = lines[i]
+                        
                         date_match = date_pattern.match(line)
                         if date_match:
                             current_date_str = f"{date_match.group(1)} {date_match.group(2)}"
@@ -143,11 +135,13 @@ else:
                             continue
                             
                         if time_range_pattern.search(line) and current_day_num:
-                            shift_type = lines[i-1] if i > 0 else "Shift"
+                            shift_type = "Shift"
+                            for j in range(max(0, i-2), i):
+                                candidate = lines[j]
+                                if not date_pattern.match(candidate) and not time_range_pattern.search(candidate) and "schedule" not in candidate.lower() and "Remembrance" not in candidate:
+                                    shift_type = candidate
+                                    break
                             
-                            if date_pattern.match(shift_type) or "schedule" in shift_type.lower() or ":" in shift_type:
-                                shift_type = "Shift"
-                                
                             shift_records.append({
                                 "DateStr": current_date_str,
                                 "DayNum": current_day_num,
