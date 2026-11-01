@@ -86,22 +86,45 @@ else:
             st.info("File uploaded successfully. Processing schedule data...")
             
             try:
-                import pypdf
-                reader = pypdf.PdfReader(uploaded_file)
+                import pdfplumber
                 extracted_rows = []
                 
-                for page in reader.pages:
-                    text = page.extract_text()
-                    if text:
-                        for line in text.split("\n"):
-                            if line.strip():
-                                extracted_rows.append([line.strip()])
-                
-                if not extracted_rows:
-                    extracted_rows = [["Parsed Schedule Data"]]
+                with pdfplumber.open(uploaded_file) as pdf:
+                    for page in pdf.pages:
+                        # Extract words and group them by layout lines
+                        words = page.extract_words()
+                        if words:
+                            # Group words roughly by vertical position (top coordinate)
+                            lines_dict = {}
+                            for word in words:
+                                top = round(word['top'], 3)
+                                # Find closest line bucket within 3 pixels
+                                matched_key = None
+                                for k in lines_dict:
+                                    if abs(k - top) < 3:
+                                        matched_key = k
+                                        break
+                                if matched_key is None:
+                                    matched_key = top
+                                    lines_dict[matched_key] = []
+                                lines_dict[matched_key].append(word['text'])
+                            
+                            # Sort lines by vertical position and join text
+                            for top_pos in sorted(lines_dict.keys()):
+                                line_text = " ".join(lines_dict[top_pos])
+                                extracted_rows.append([line_text])
+                        else:
+                            # Fallback to standard text extraction
+                            text = page.extract_text()
+                            if text:
+                                for line in text.split("\n"):
+                                    if line.strip():
+                                        extracted_rows.append([line.strip()])
 
-                # Create DataFrame dynamically based on row contents
-                df_preview = pd.DataFrame(extracted_rows)
+                if not extracted_rows:
+                    extracted_rows = [["James Rampersadsingh", "No shift text detected"]]
+
+                df_preview = pd.DataFrame(extracted_rows, columns=["Extracted Schedule Line"])
                 st.write("Preview of Extracted Schedule Data:")
                 st.dataframe(df_preview.head(15))
 
