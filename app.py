@@ -118,12 +118,39 @@ else:
                     if not employee_name or len(employee_name) < 3:
                         employee_name = "James Rampersadsingh"
 
-                    # 2. PARSE SHIFTS & DATES
+                    # 2. PARSE SHIFTS & DATES (Flexible Matching)
                     full_text = page.extract_text() or ""
                     lines = [l.strip() for l in full_text.split("\n") if l.strip()]
                     
                     date_pattern = re.compile(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})$', re.IGNORECASE)
-                    time_pattern = re.compile(r'(\d{2}:\d{2}\s*-\s*\d{2}:\d{2})\s*\[([\d\.]+)\]')
+                    
+                    current_day_num = None
+                    current_date_str = None
+                    i = 0
+                    while i < len(lines):
+                        line = lines[i]
+                        date_match = date_pattern.match(line)
+                        if date_match:
+                            current_date_str = f"{date_match.group(1)} {date_match.group(2)}"
+                            current_day_num = date_match.group(2)
+                            i += 1
+                            continue
+                            
+                        # Look for time patterns like HH:MM-HH:MM or shift codes
+                        if "-" in line and any(char.isdigit() for char in line) and current_day_num:
+                            # The shift name/code is usually the line immediately before the time block
+                            shift_type = lines[i-1] if i > 0 else "Shift"
+                            
+                            # Clean up if it accidentally grabbed a date or header as a shift name
+                            if date_pattern.match(shift_type) or "schedule" in shift_type.lower():
+                                shift_type = "Shift"
+                                
+                            shift_records.append({
+                                "DateStr": current_date_str,
+                                "DayNum": current_day_num,
+                                "Shift": shift_type
+                            })
+                        i += 1
                     
                     current_day_num = None
                     current_date_str = None
