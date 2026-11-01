@@ -1,4 +1,7 @@
 import streamlit as st
+import pdfplumber
+import pandas as pd
+import gspread
 
 # ---------------------------------------------------------
 # CONFIGURATION (Set your credentials and security codes here)
@@ -21,7 +24,7 @@ if "code_unlocked" not in st.session_state:
 st.set_page_config(page_title="Team Schedule Portal", layout="centered")
 
 # ---------------------------------------------------------
-# STEP 1: USERNAME & PASSWORD LOGIN
+# STEP 1: LOGIN GATE
 # ---------------------------------------------------------
 if not st.session_state["authenticated"]:
     st.markdown("<h1 style='text-align: center;'>Team Schedule Portal</h1>", unsafe_allow_html=True)
@@ -30,25 +33,21 @@ if not st.session_state["authenticated"]:
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
-    # Adjusted column ratio to align the button flush with the right edge of the inputs
     col1, col2 = st.columns([6.8, 1])
     with col2:
-        sign_in_clicked = st.button("Sign In")
-
-    if sign_in_clicked:
-        if username in VALID_USERS and VALID_USERS[username] == password:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Invalid Username or Password.")
+        if st.button("Sign In"):
+            if username in VALID_USERS and VALID_USERS[username] == password:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Invalid Username or Password.")
 
 # ---------------------------------------------------------
-# STEP 2 & 3: ACCESS CODE GATE & LINK REVEAL
+# STEP 2 & 3: ACCESS GATE & PDF UPLOADER
 # ---------------------------------------------------------
 else:
     st.markdown("<h1 style='text-align: center;'>Welcome to the Schedule Portal</h1>", unsafe_allow_html=True)
 
-    # Center the sign-out button directly underneath the title
     col_out1, col_out2, col_out3 = st.columns([2.3, 1, 2.3])
     with col_out2:
         if st.button("Sign Out"):
@@ -58,26 +57,67 @@ else:
 
     st.write("---")
 
-    # STEP 2: Access Code Gate
     if not st.session_state["code_unlocked"]:
         st.markdown("<h3 style='text-align: center;'>Enter Access Code</h3>", unsafe_allow_html=True)
         entered_code = st.text_input("Enter the security code to reveal the schedule link:", type="password")
         
-        # Center the submit button underneath the access code box
         col_btn1, col_btn2, col_btn3 = st.columns([2.3, 1, 2.3])
         with col_btn2:
-            submit_clicked = st.button("Submit Code")
+            if st.button("Submit Code"):
+                if entered_code == SECRET_ACCESS_CODE:
+                    st.session_state["code_unlocked"] = True
+                    st.success("Access Granted.")
+                    st.rerun()
+                else:
+                    st.error("Incorrect Access Code. Please try again.")
 
-        if submit_clicked:
-            if entered_code == SECRET_ACCESS_CODE:
-                st.session_state["code_unlocked"] = True
-                st.success("Access Granted.")
-                st.rerun()
-            else:
-                st.error("Incorrect Access Code. Please try again.")
-
-    # STEP 3: Reveal the Google Sheets link once unlocked
     else:
         st.success("Access Code Verified.")
         st.markdown(f"### [Click Here to Open Master Google Sheet]({GOOGLE_SHEET_URL})")
-        st.info("You can bookmark this page or click the link above to view and update your shifts.")
+        st.write("---")
+
+        # ---------------------------------------------------------
+        # SCHEDULE PDF UPLOADER SECTION
+        # ---------------------------------------------------------
+        st.markdown("<h3 style='text-align: center;'>Upload Shift Schedule PDF</h3>", unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Choose a PDF schedule file to import:", type=["pdf"])
+
+        if uploaded_file is not None:
+            st.info("File uploaded successfully. Extracting schedule data...")
+            
+            # Extract text/tables from the uploaded PDF using pdfplumber
+            extracted_rows = []
+            with pdfplumber.open(uploaded_file) as pdf:
+                for page in pdf.pages:
+                    # Extract tables if present, or fallback to lines of text
+                    table = page.extract_table()
+                    if table:
+                        extracted_rows.extend(table)
+                    else:
+                        text = page.extract_text()
+                        if text:
+                            for line in text.split("\n"):
+                                extracted_rows.append([line])
+
+            if extracted_rows:
+                df_preview = pd.DataFrame(extracted_rows)
+                st.write("Preview of Extracted Schedule Data:")
+                st.dataframe(df_preview.head(10))
+
+                col_sub1, col_sub2, col_sub3 = st.columns([2.3, 1, 2.3])
+                with col_sub2:
+                    if st.button("Populate Sheet"):
+                        try:
+                            # Authenticate using Streamlit secrets
+                            gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+                            
+                            # Open the Google Sheet by URL
+                            sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
+                            
+                            # Append data to the sheet
+                            sheet.append_rows(extracted_rows)
+                            st.success("Schedule successfully pushed to Google Sheet!")
+                        except Exception as e:
+                            st.error(f"Error connecting to Google Sheets: {e}")
+            else:
+                st.warning("No readable text or tables found in this PDF.")
