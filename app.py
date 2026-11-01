@@ -86,23 +86,22 @@ else:
             st.info("File uploaded successfully. Processing schedule data...")
             
             try:
-                # Use pdfminer/pypdf or fallback text extraction
                 import pypdf
                 reader = pypdf.PdfReader(uploaded_file)
                 extracted_rows = []
                 
-                for page_num, page in enumerate(reader.pages):
+                for page in reader.pages:
                     text = page.extract_text()
                     if text:
                         for line in text.split("\n"):
                             if line.strip():
                                 extracted_rows.append([line.strip()])
                 
-                # If standard text extraction is empty, handle image-based PDF or fallback
                 if not extracted_rows:
-                    extracted_rows = [["James Rampersadsingh", "Nov 1 - Nov 30", "Parsed Schedule Data"]]
+                    extracted_rows = [["Parsed Schedule Data"]]
 
-                df_preview = pd.DataFrame(extracted_rows, columns=["Schedule Details"])
+                # Create DataFrame dynamically based on row contents
+                df_preview = pd.DataFrame(extracted_rows)
                 st.write("Preview of Extracted Schedule Data:")
                 st.dataframe(df_preview.head(15))
 
@@ -110,13 +109,8 @@ else:
                 with col_sub2:
                     if st.button("Populate Sheet"):
                         try:
-                            # Authenticate using Streamlit secrets
                             gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-                            
-                            # Open the Google Sheet by URL
                             sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
-                            
-                            # Append data to the sheet
                             sheet.append_rows(extracted_rows)
                             st.success("Schedule successfully pushed to Google Sheet!")
                         except Exception as e:
