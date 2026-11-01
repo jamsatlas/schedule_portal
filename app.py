@@ -109,16 +109,15 @@ else:
                     
                     # Fallback name input if automatic detection misses
                     if not employee_name or len(employee_name) < 3:
-                        employee_name = st.text_input("Could not automatically detect name from PDF. Please type your full name as it appears on the Master Sheet:")
+                        employee_name = st.text_input("Could not automatically detect name from PDF. Please type your full name as it appears on the Master Sheet:", value="James Rampersadsingh")
                         if not employee_name:
                             st.stop()
 
-                    # 2. BULLETPROOF SHIFT & DATE EXTRACTOR
+                    # 2. FLEXIBLE SHIFT & DATE EXTRACTOR
                     full_text = page.extract_text() or ""
                     lines = [l.strip() for l in full_text.split("\n") if l.strip()]
                     
                     date_pattern = re.compile(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})$', re.IGNORECASE)
-                    time_range_pattern = re.compile(r'\d{2}:\d{2}\s*-\s*\d{2}:\d{2}')
                     
                     current_day_num = None
                     current_date_str = None
@@ -134,19 +133,20 @@ else:
                             i += 1
                             continue
                             
-                        if time_range_pattern.search(line) and current_day_num:
+                        if current_day_num and ("[" in line or ":" in line) and not date_pattern.match(line):
                             shift_type = "Shift"
-                            for j in range(max(0, i-2), i):
+                            for j in range(max(0, i-3), i):
                                 candidate = lines[j]
-                                if not date_pattern.match(candidate) and not time_range_pattern.search(candidate) and "schedule" not in candidate.lower() and "Remembrance" not in candidate:
+                                if not date_pattern.match(candidate) and ":" not in candidate and "[" not in candidate and "schedule" not in candidate.lower() and "Remembrance" not in candidate and len(candidate) < 15:
                                     shift_type = candidate
                                     break
                             
-                            shift_records.append({
-                                "DateStr": current_date_str,
-                                "DayNum": current_day_num,
-                                "Shift": shift_type
-                            })
+                            if not any(r["DayNum"] == current_day_num for r in shift_records):
+                                shift_records.append({
+                                    "DateStr": current_date_str,
+                                    "DayNum": current_day_num,
+                                    "Shift": shift_type
+                                })
                         i += 1
 
                 # 3. DISPLAY CLEAN PREVIEW & SYNC
