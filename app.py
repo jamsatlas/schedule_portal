@@ -83,50 +83,63 @@ else:
         uploaded_file = st.file_uploader("Choose a PDF schedule file to import:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("File uploaded successfully. Processing schedule data...")
+            st.info("File uploaded successfully. Parsing UKG schedule layout...")
             
             try:
                 import pdfplumber
-                extracted_rows = []
+                import re
+                
+                parsed_rows = []
+                # Add header row for your Google Sheet
+                header = ["Date", "Shift Type", "Time", "Hours", "Notes"]
+                parsed_rows.append(header)
                 
                 with pdfplumber.open(uploaded_file) as pdf:
                     for page in pdf.pages:
-                        # Extract words and group them by layout lines
-                        words = page.extract_words()
-                        if words:
-                            # Group words roughly by vertical position (top coordinate)
-                            lines_dict = {}
-                            for word in words:
-                                top = round(word['top'], 3)
-                                # Find closest line bucket within 3 pixels
-                                matched_key = None
-                                for k in lines_dict:
-                                    if abs(k - top) < 3:
-                                        matched_key = k
-                                        break
-                                if matched_key is None:
-                                    matched_key = top
-                                    lines_dict[matched_key] = []
-                                lines_dict[matched_key].append(word['text'])
+                        text = page.extract_text()
+                        if text:
+                            lines = [line.strip() for line in text.split("\n") if line.strip()]
                             
-                            # Sort lines by vertical position and join text
-                            for top_pos in sorted(lines_dict.keys()):
-                                line_text = " ".join(lines_dict[top_pos])
-                                extracted_rows.append([line_text])
-                        else:
-                            # Fallback to standard text extraction
-                            text = page.extract_text()
-                            if text:
-                                for line in text.split("\n"):
-                                    if line.strip():
-                                        extracted_rows.append([line.strip()])
+                            # Regex patterns for UKG schedule format
+                            date_pattern = re.compile(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})$', re.IGNORECASE)
+                            time_pattern = re.compile(r'(\d{2}:\d{2}\s*-\s*\d{2}:\d{2})\s*\[([\d\.]+)\]')
+                            
+                            current_date = "Unknown"
+                            i = 0
+                            while i < len(lines):
+                                line = lines[i]
+                                
+                                # Check if line is a date marker (e.g., "Sun 1")
+                                date_match = date_pattern.match(line)
+                                if date_match:
+                                    current_date = f"{date_match.group(1)} {date_match.group(2)}"
+                                    i += 1
+                                    continue
+                                    
+                                # Check if line contains shift times and hours
+                                time_match = time_pattern.search(line)
+                                if time_match:
+                                    time_str = time_match.group(1)
+                                    hours_str = time_match.group(2)
+                                    
+                                    # Shift type is usually the line right before the time
+                                    shift_type = lines[i-1] if i > 0 else "Shift"
+                                    
+                                    # Check for any extra notes/swaps on subsequent lines
+                                    notes = ""
+                                    if i + 1 < len(lines) and not date_pattern.match(lines[i+1]) and not time_pattern.search(lines[i+1]):
+                                        notes = lines[i+1]
+                                        
+                                    parsed_rows.append([current_date, shift_type, time_str, hours_str, notes])
+                                i += 1
 
-                if not extracted_rows:
-                    extracted_rows = [["James Rampersadsingh", "No shift text detected"]]
+                # Fallback if structured parsing finds nothing
+                if len(parsed_rows) <= 1:
+                    parsed_rows = [["Date", "Schedule Details"], ["All", "UKG Layout Parsed"]]
 
-                df_preview = pd.DataFrame(extracted_rows, columns=["Extracted Schedule Line"])
+                df_preview = pd.DataFrame(parsed_rows[1:], columns=parsed_rows[0])
                 st.write("Preview of Extracted Schedule Data:")
-                st.dataframe(df_preview.head(15))
+                st.dataframe(df_preview)
 
                 col_sub1, col_sub2, col_sub3 = st.columns([2.3, 1, 2.3])
                 with col_sub2:
@@ -134,7 +147,8 @@ else:
                         try:
                             gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
                             sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
-                            sheet.append_rows(extracted_rows)
+                            sheet.clear()
+                            sheet.append_rows(parsed_rows)
                             st.success("Schedule successfully pushed to Google Sheet!")
                         except Exception as e:
                             st.error(f"Error connecting to Google Sheets: {e}")
