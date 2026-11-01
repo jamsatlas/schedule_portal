@@ -100,7 +100,7 @@ else:
                         name_tokens = []
                         for w in top_right_words:
                             txt = w['text']
-                            if txt in ['JR', 'AS', 'LN', 'MS', 'My', 'schedule'] or '202' in txt or '-' in txt:
+                            if txt in ['JR', 'AS', 'LN', 'MS', 'BP', 'NF', 'AG', 'My', 'schedule'] or '202' in txt or '-' in txt:
                                 continue
                             name_tokens.append(txt)
                         
@@ -111,18 +111,24 @@ else:
                     if not employee_name or len(employee_name) < 3:
                         text = page.extract_text() or ""
                         for line in text.split("\n"):
-                            if "James Rampersadsingh" in line or "Rampersadsingh" in line:
-                                employee_name = "James Rampersadsingh"
-                                break
-                    
-                    if not employee_name or len(employee_name) < 3:
-                        employee_name = "James Rampersadsingh"
+                            # Check common name patterns or capture words near top right
+                            clean_line = line.strip()
+                            if len(clean_line) > 3 and not "schedule" in clean_line.lower() and not "202" in clean_line:
+                                # Often the name appears standalone near top
+                                pass
 
-                    # 2. PARSE SHIFTS & DATES (Flexible Matching)
+                    # If name extraction still couldn't find it automatically, let the user input it safely
+                    if not employee_name or len(employee_name) < 3:
+                        employee_name = st.text_input("Could not automatically detect name from PDF. Please type your full name as it appears on the Master Sheet:")
+                        if not employee_name:
+                            st.stop() # Wait until user inputs their name
+
+                    # 2. ROBUST SHIFT & DATE PARSER
                     full_text = page.extract_text() or ""
                     lines = [l.strip() for l in full_text.split("\n") if l.strip()]
                     
                     date_pattern = re.compile(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})$', re.IGNORECASE)
+                    time_range_pattern = re.compile(r'\d{2}:\d{2}\s*-\s*\d{2}:\d{2}')
                     
                     current_day_num = None
                     current_date_str = None
@@ -136,37 +142,12 @@ else:
                             i += 1
                             continue
                             
-                        # Look for time patterns like HH:MM-HH:MM or shift codes
-                        if "-" in line and any(char.isdigit() for char in line) and current_day_num:
-                            # The shift name/code is usually the line immediately before the time block
+                        if time_range_pattern.search(line) and current_day_num:
                             shift_type = lines[i-1] if i > 0 else "Shift"
                             
-                            # Clean up if it accidentally grabbed a date or header as a shift name
-                            if date_pattern.match(shift_type) or "schedule" in shift_type.lower():
+                            if date_pattern.match(shift_type) or "schedule" in shift_type.lower() or ":" in shift_type:
                                 shift_type = "Shift"
                                 
-                            shift_records.append({
-                                "DateStr": current_date_str,
-                                "DayNum": current_day_num,
-                                "Shift": shift_type
-                            })
-                        i += 1
-                    
-                    current_day_num = None
-                    current_date_str = None
-                    i = 0
-                    while i < len(lines):
-                        line = lines[i]
-                        date_match = date_pattern.match(line)
-                        if date_match:
-                            current_date_str = f"{date_match.group(1)} {date_match.group(2)}"
-                            current_day_num = date_match.group(2)
-                            i += 1
-                            continue
-                            
-                        time_match = time_pattern.search(line)
-                        if time_match and current_day_num:
-                            shift_type = lines[i-1] if i > 0 else "Shift"
                             shift_records.append({
                                 "DateStr": current_date_str,
                                 "DayNum": current_day_num,
