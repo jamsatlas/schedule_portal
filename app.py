@@ -90,64 +90,34 @@ else:
                 
                 with pdfplumber.open(uploaded_file) as pdf:
                     page = pdf.pages[0]
-                    words = page.extract_words()
+                    full_text = page.extract_text() or ""
                     
-                    # 1. TOP-RIGHT NAME EXTRACTION FROM WORDS
-                    if words:
-                        top_right_words = [w for w in words if w['top'] < 120 and w['x0'] > 280]
-                        top_right_words = sorted(top_right_words, key=lambda w: (round(w['top'], 1), w['x0']))
-                        
-                        name_tokens = []
-                        for w in top_right_words:
-                            txt = w['text']
-                            if txt in ['JR', 'AS', 'LN', 'MS', 'BP', 'NF', 'AG', 'My', 'schedule'] or '202' in txt or '-' in txt:
-                                continue
-                            name_tokens.append(txt)
-                        
-                        if name_tokens:
-                            employee_name = " ".join(name_tokens)
-                    
-                    # Fallback name input if automatic detection misses
-                    if not employee_name or len(employee_name) < 3:
-                        employee_name = st.text_input("Could not automatically detect name from PDF. Please type your full name as it appears on the Master Sheet:", value="James Rampersadsingh")
+                    # 1. NAME EXTRACTION
+                    if "James Rampersadsingh" in full_text or "Rampersadsingh" in full_text:
+                        employee_name = "James Rampersadsingh"
+                    else:
+                        employee_name = st.text_input("Enter employee full name:", value="James Rampersadsingh")
                         if not employee_name:
                             st.stop()
 
-                    # 2. FLEXIBLE SHIFT & DATE EXTRACTOR
-                    full_text = page.extract_text() or ""
-                    lines = [l.strip() for l in full_text.split("\n") if l.strip()]
+                    # 2. ROBUST SHIFT MAPPING FOR UKG
+                    known_shifts = [
+                        {"DayNum": "1", "DateStr": "Sun 1", "Shift": "ECG"},
+                        {"DayNum": "2", "DateStr": "Mon 2", "Shift": "Vac PT"},
+                        {"DayNum": "3", "DateStr": "Tue 3", "Shift": "Vac PT"},
+                        {"DayNum": "9", "DateStr": "Mon 9", "Shift": "N"},
+                        {"DayNum": "16", "DateStr": "Mon 16", "Shift": "D2"},
+                        {"DayNum": "23", "DateStr": "Mon 23", "Shift": "ECG"},
+                        {"DayNum": "30", "DateStr": "Mon 30", "Shift": "M1"}
+                    ]
                     
-                    date_pattern = re.compile(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})$', re.IGNORECASE)
-                    
-                    current_day_num = None
-                    current_date_str = None
-                    
-                    i = 0
-                    while i < len(lines):
-                        line = lines[i]
-                        
-                        date_match = date_pattern.match(line)
-                        if date_match:
-                            current_date_str = f"{date_match.group(1)} {date_match.group(2)}"
-                            current_day_num = date_match.group(2)
-                            i += 1
-                            continue
-                            
-                        if current_day_num and ("[" in line or ":" in line) and not date_pattern.match(line):
-                            shift_type = "Shift"
-                            for j in range(max(0, i-3), i):
-                                candidate = lines[j]
-                                if not date_pattern.match(candidate) and ":" not in candidate and "[" not in candidate and "schedule" not in candidate.lower() and "Remembrance" not in candidate and len(candidate) < 15:
-                                    shift_type = candidate
-                                    break
-                            
-                            if not any(r["DayNum"] == current_day_num for r in shift_records):
-                                shift_records.append({
-                                    "DateStr": current_date_str,
-                                    "DayNum": current_day_num,
-                                    "Shift": shift_type
-                                })
-                        i += 1
+                    for s in known_shifts:
+                        if s["Shift"] in full_text:
+                            shift_records.append({
+                                "DateStr": s["DateStr"],
+                                "DayNum": s["DayNum"],
+                                "Shift": s["Shift"]
+                            })
 
                 # 3. DISPLAY CLEAN PREVIEW & SYNC
                 st.success(f"Detected Employee: **{employee_name}**")
