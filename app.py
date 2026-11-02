@@ -23,6 +23,106 @@ if "code_unlocked" not in st.session_state:
 
 st.set_page_config(page_title="Team Schedule Portal", layout="centered")
 
+def parse_existing_sheet(data):
+    """
+    Parses current Google Sheet matrix into structured python dictionary:
+    - employees: list of employee names in order
+    - months: dict mapping (year, month) -> {
+        'title': 'October 2026',
+        'num_days': 31,
+        'employee_shifts': { 'James Rampersadsingh': ['ECG', 'N', ...] }
+      }
+    """
+    if len(data) < 2:
+        return [], {}
+        
+    row1 = data[0]
+    row2 = data[1]
+    
+    employees = []
+    for r in range(2, len(data)):
+        if data[r] and data[r][0].strip():
+            emp = data[r][0].strip()
+            if emp not in employees:
+                employees.append(emp)
+
+    months = {}
+    total_cols = len(row2)
+    c = 1
+    while c < total_cols:
+        month_found = None
+        for col_idx in range(c, total_cols):
+            val = row1[col_idx].strip() if col_idx < len(row1) else ""
+            if val:
+                try:
+                    parts = val.split()
+                    if len(parts) >= 2:
+                        m_str, y_str = parts[0], parts[1]
+                        m_int = datetime.strptime(m_str, "%B").month
+                        y_int = int(y_str)
+                        month_found = (col_idx, val, y_int, m_int)
+                        break
+                except Exception:
+                    pass
+        if not month_found:
+            break
+            
+        start_c, title, yr, mo = month_found
+        n_days = monthrange(yr, mo)[1]
+        
+        emp_shifts = {}
+        for emp in employees:
+            emp_row = None
+            for r in range(2, len(data)):
+                if data[r] and data[r][0].strip().lower() == emp.lower():
+                    emp_row = data[r]
+                    break
+            
+            shifts_list = []
+            for d in range(1, n_days + 1):
+                col_i = start_c + (d - 1)
+                val = ""
+                if emp_row and col_i < len(emp_row):
+                    val = emp_row[col_i].strip()
+                shifts_list.append(val)
+            emp_shifts[emp] = shifts_list
+            
+        months[(yr, mo)] = {
+            'title': title,
+            'num_days': n_days,
+            'employee_shifts': emp_shifts
+        }
+        c = start_c + n_days
+        
+    return employees, months
+
+def rebuild_sheet_grid(employees, months):
+    """
+    Rebuilds 2D grid matrix sorted strictly chronologically by (year, month).
+    """
+    sorted_month_keys = sorted(months.keys())
+    
+    row1 = [""]
+    row2 = ["Employee Name"]
+    
+    for key in sorted_month_keys:
+        m_info = months[key]
+        n_days = m_info['num_days']
+        row1.extend([m_info['title']] + [""] * (n_days - 1))
+        row2.extend([str(d) for d in range(1, n_days + 1)])
+        
+    grid = [row1, row2]
+    
+    for emp in employees:
+        emp_row = [emp]
+        for key in sorted_month_keys:
+            m_info = months[key]
+            emp_shifts = m_info['employee_shifts'].get(emp, [""] * m_info['num_days'])
+            emp_row.extend(emp_shifts)
+        grid.append(emp_row)
+        
+    return grid
+
 def apply_full_schedule_formatting(spreadsheet, sheet, data):
     """
     Applies exact grid borders, compact cell widths, centered alignment,
@@ -56,7 +156,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
         "repeatCell": {
             "range": {
                 "sheetId": sheet.id,
-                "startRowIndex": 1, # Row 2 (Employee Name header)
+                "startRowIndex": 1,
                 "endRowIndex": max_rows,
                 "startColumnIndex": 0,
                 "endColumnIndex": 1
@@ -78,7 +178,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
         }
     })
 
-    # 2. Identify and format all month blocks in row 1
+    # 2. Format each month block
     c = 1
     while c < total_cols:
         month_found = None
@@ -103,7 +203,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
         n_days = monthrange(yr, mo)[1]
         end_c = min(start_c + n_days, total_cols)
 
-        # A. Set Day Column Widths (38px compact size)
+        # Set Day Column Widths (38px)
         requests.append({
             "updateDimensionProperties": {
                 "range": {
@@ -117,7 +217,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
             }
         })
 
-        # B. Set base formatting for all day columns (white background, center alignment, grid borders)
+        # Set base day cell formatting
         requests.append({
             "repeatCell": {
                 "range": {
@@ -144,7 +244,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
             }
         })
 
-        # C. Format Month Title (Row 1)
+        # Format Month Title Header (Row 1)
         requests.append({
             "repeatCell": {
                 "range": {
@@ -165,7 +265,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
             }
         })
 
-        # D. Format Row 2 (Day Numbers Header)
+        # Format Day Numbers Header (Row 2)
         requests.append({
             "repeatCell": {
                 "range": {
@@ -186,7 +286,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
             }
         })
 
-        # E. Apply Grey Background (#d9d9d9) ONLY to actual Calendar Weekends (Saturday & Sunday)
+        # Apply Grey Background ONLY to actual Calendar Weekends (Saturday & Sunday)
         for d in range(1, n_days + 1):
             col_pos = start_c + (d - 1)
             if col_pos >= total_cols:
@@ -197,7 +297,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
                     "repeatCell": {
                         "range": {
                             "sheetId": sheet.id,
-                            "startRowIndex": 1, # From day numbers row downwards
+                            "startRowIndex": 1,
                             "endRowIndex": max_rows,
                             "startColumnIndex": col_pos,
                             "endColumnIndex": col_pos + 1
@@ -298,81 +398,55 @@ else:
                             gc = gspread.service_account_from_dict(cred_dict)
                             spreadsheet = gc.open_by_url(GOOGLE_SHEET_URL)
                             sheet = spreadsheet.sheet1
-                            data = sheet.get_all_values()
                             
-                            target_month_header = f"{month_name} {year_str}"
-                            month_int = start_date.month
-                            num_days = monthrange(start_date.year, month_int)[1]
-
-                            if len(data) < 2:
-                                sheet.update("A1:A2", [[""], ["Employee Name"]])
-                                data = sheet.get_all_values()
+                            raw_data = sheet.get_all_values()
+                            
+                            # 1. Parse existing sheet matrix into structured memory
+                            employees, months_dict = parse_existing_sheet(raw_data)
+                            
+                            # 2. Ensure current employee is in employees list
+                            if employee_name not in employees:
+                                employees.append(employee_name)
                                 
-                            row1_month = data[0]
-                            row2_days = data[1] if len(data) > 1 else []
+                            # 3. Add or update target month data
+                            current_year = start_date.year
+                            current_month = start_date.month
+                            month_key = (current_year, current_month)
+                            target_month_title = f"{month_name} {year_str}"
+                            num_days = monthrange(current_year, current_month)[1]
                             
-                            month_start_col = -1
-                            for col_idx, header in enumerate(row1_month):
-                                if target_month_header.lower() in header.lower():
-                                    month_start_col = col_idx
-                                    break
+                            if month_key not in months_dict:
+                                months_dict[month_key] = {
+                                    'title': target_month_title,
+                                    'num_days': num_days,
+                                    'employee_shifts': {}
+                                }
+                            
+                            shifts_array = months_dict[month_key]['employee_shifts'].get(employee_name, [""] * num_days)
+                            for rec in shift_records:
+                                d_idx = int(rec["DayNum"]) - 1
+                                if 0 <= d_idx < num_days:
+                                    shifts_array[d_idx] = rec["Shift"]
                                     
-                            if month_start_col == -1:
-                                last_day_col = 0
-                                for i, val in enumerate(row2_days):
-                                    if val.strip() != "":
-                                        last_day_col = i
-                                        
-                                month_start_col = max(1, last_day_col + 1)
-                                
-                                sheet.update(gspread.utils.rowcol_to_a1(1, month_start_col + 1), [[target_month_header]])
-                                days_list = [str(d) for d in range(1, num_days + 1)]
-                                sheet.update(gspread.utils.rowcol_to_a1(2, month_start_col + 1), [days_list])
-                                
-                                data = sheet.get_all_values()
-                                row2_days = data[1]
-
-                            emp_row_idx = -1
-                            target_row_data = []
-                            for idx in range(2, len(data)):
-                                row = data[idx]
-                                if len(row) > 0 and employee_name.lower() in row[0].lower():
-                                    emp_row_idx = idx
-                                    target_row_data = list(row)
-                                    break
-
-                            if emp_row_idx == -1:
-                                emp_row_idx = len(data)
-                                target_row_data = [employee_name]
-                                sheet.update(f"A{emp_row_idx + 1}", [[employee_name]])
-
-                            end_col = month_start_col + num_days
-                            while len(target_row_data) < end_col:
-                                target_row_data.append("")
-
-                            updates_count = 0
-                            for record in shift_records:
-                                target_day = record["DayNum"]
-                                matched_col_idx = -1
-                                
-                                for col_idx in range(month_start_col, end_col):
-                                    if col_idx < len(row2_days) and row2_days[col_idx].strip() == target_day:
-                                        matched_col_idx = col_idx
-                                        break
-                                        
-                                if matched_col_idx != -1:
-                                    target_row_data[matched_col_idx] = record["Shift"]
-                                    updates_count += 1
-
-                            slice_to_write = target_row_data[month_start_col:end_col]
-                            start_a1 = gspread.utils.rowcol_to_a1(emp_row_idx + 1, month_start_col + 1)
-                            sheet.update(start_a1, [slice_to_write])
+                            months_dict[month_key]['employee_shifts'][employee_name] = shifts_array
                             
-                            # Apply complete formatting (Borders, Cell Sizes, Alignment & Calendar-Accurate Grey Weekend Shading)
-                            full_data = sheet.get_all_values()
-                            apply_full_schedule_formatting(spreadsheet, sheet, full_data)
+                            # Ensure all employees have allocated arrays for all months
+                            for emp in employees:
+                                for mk in months_dict:
+                                    if emp not in months_dict[mk]['employee_shifts']:
+                                        months_dict[mk]['employee_shifts'][emp] = [""] * months_dict[mk]['num_days']
+                                        
+                            # 4. Rebuild full 2D grid matrix sorted strictly chronologically by (year, month)
+                            new_grid = rebuild_sheet_grid(employees, months_dict)
+                            
+                            # 5. Clear sheet & write chronologically sorted matrix
+                            sheet.clear()
+                            sheet.update("A1", new_grid)
+                            
+                            # 6. Apply full formatting (Column widths, borders, alignment & calendar-accurate weekend grey shading)
+                            apply_full_schedule_formatting(spreadsheet, sheet, new_grid)
 
-                            st.success(f"Successfully updated {updates_count} shifts for {employee_name} in Master Sheet and applied calendar formatting!")
+                            st.success(f"Successfully updated shifts for **{employee_name}** in Master Sheet and sorted schedule chronologically!")
                         except Exception as sheet_err:
                             st.error(f"Google Sheets sync error:\n{traceback.format_exc()}")
                 else:
