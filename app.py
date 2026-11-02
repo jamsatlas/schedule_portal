@@ -185,29 +185,35 @@ else:
                                     
                                     sheet.update("A1", [row1, row2])
                                     
-                                    # Format columns: narrow width, weekend shading (gray), and solid grid borders
+                                    # Border formatting definition
                                     border_style = {
                                         "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
                                         "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
                                         "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
                                         "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
                                     }
-                                    
+
+                                    # Resize date columns B onwards to 35px in bulk
+                                    sheet.set_column_width(2, 1 + num_days, 35)
+
+                                    # Apply borders & weekend shading across date columns
                                     for col_idx in range(2, 2 + num_days):
                                         col_letter = gspread.utils.rowcol_to_a1(1, col_idx)[0]
-                                        sheet.format(f"{col_letter}1:{col_letter}100", {"borders": border_style})
-                                        sheet.format(f"{col_letter}1", {"pixelSize": 35})
                                         
-                                        # Check if weekend (Saturday or Sunday) to shade background gray
+                                        # Base borders across grid range
+                                        sheet.format(f"{col_letter}1:{col_letter}100", {"borders": border_style})
+                                        
+                                        # Weekend shading (Saturday or Sunday)
                                         d = col_idx - 1
                                         dt_obj = datetime(int(year_str), month_int, d)
-                                        if dt_obj.weekday() >= 5: # 5 = Saturday, 6 = Sunday
+                                        if dt_obj.weekday() >= 5:
                                             sheet.format(f"{col_letter}1:{col_letter}100", {
-                                                "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85}
+                                                "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85},
+                                                "borders": border_style
                                             })
                                         
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized 2-row clean calendar headers with weekend shading for **{month_name} {year_str}**.")
+                                    st.info(f"Initialized clean 2-row headers with compact cells and weekend shading for **{month_name} {year_str}**.")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
