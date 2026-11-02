@@ -121,67 +121,58 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. ROBUST MULTI-PAGE UKG SHIFT PARSER
+                # 3. ROBUST FLEXIBLE MULTI-PAGE PARSER
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
                 valid_shift_codes = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "Vac"}
 
                 current_day = None
-                block_lines = []
-                days_list = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-
-                def process_day_block(day_str, lines_list):
-                    if not day_str:
-                        return
-                    day_num = str(int(day_str))
-                    if day_num in seen_days:
-                        return
-                    
-                    block_text = " ".join(lines_list)
-                    block_lower = block_text.lower()
-                    
-                    # Skip statutory holidays and time-off requests
-                    if any(term in block_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
-                        return
-
-                    found_shift = None
-                    for token in block_text.split():
-                        token_clean = token.strip("[](),.")
-                        if token_clean in valid_shift_codes:
-                            found_shift = "VP" if token_clean in ["Vac", "VP"] else token_clean
-                            break
-                    
-                    if not found_shift:
-                        for token in block_text.split():
-                            token_clean = token.strip("[](),.")
-                            if token_clean.isupper() and 2 <= len(token_clean) <= 5 and not token_clean.isdigit():
-                                if token_clean not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB"]:
-                                    found_shift = token_clean
-                                    break
-
-                    if found_shift:
-                        seen_days.add(day_num)
-                        shift_records.append({
-                            "FullDate": f"{month_short} {day_num}, {year_str}",
-                            "DayNum": day_num,
-                            "Shift": found_shift
-                        })
+                buffer_text = ""
 
                 for line in lines:
                     l_str = line.strip()
-                    if l_str in days_list:
+                    
+                    # Skip statutory holidays and time-off requests
+                    l_lower = l_str.lower()
+                    if any(term in l_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
+                        current_day = None
+                        buffer_text = ""
                         continue
-                    if l_str.isdigit() and 1 <= int(l_str) <= 31:
-                        if current_day:
-                            process_day_block(current_day, block_lines)
-                        current_day = l_str
-                        block_lines = []
-                    elif current_day:
-                        block_lines.append(l_str)
 
-                if current_day:
-                    process_day_block(current_day, block_lines)
+                    # Check if line contains a day number
+                    if l_str.isdigit() and 1 <= int(l_str) <= 31:
+                        if current_day and buffer_text:
+                            # Evaluate previous day buffer
+                            for token in buffer_text.split():
+                                t_clean = token.strip("[](),.")
+                                if t_clean in valid_shift_codes:
+                                    s_code = "VP" if t_clean in ["Vac", "VP"] else t_clean
+                                    if current_day not in seen_days:
+                                        seen_days.add(current_day)
+                                        shift_records.append({
+                                            "FullDate": f"{month_short} {current_day}, {year_str}",
+                                            "DayNum": current_day,
+                                            "Shift": s_code
+                                        })
+                                    break
+                        current_day = str(int(l_str))
+                        buffer_text = ""
+                    elif current_day:
+                        buffer_text += " " + l_str
+                        # Check tokens live in buffer
+                        for token in buffer_text.split():
+                            t_clean = token.strip("[](),.")
+                            if t_clean in valid_shift_codes:
+                                s_code = "VP" if t_clean in ["Vac", "VP"] else t_clean
+                                if current_day not in seen_days:
+                                    seen_days.add(current_day)
+                                    shift_records.append({
+                                        "FullDate": f"{month_short} {current_day}, {year_str}",
+                                        "DayNum": current_day,
+                                        "Shift": s_code
+                                    })
+                                break
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
                 st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
