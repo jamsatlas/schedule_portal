@@ -123,33 +123,32 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                raw_shifts = [
-                    {"DayNum": "1", "DayName": "Sun", "Shift": "ECG"},
-                    {"DayNum": "2", "DayName": "Mon", "Shift": "Vac PT"},
-                    {"DayNum": "3", "DayName": "Tue", "Shift": "Vac PT"},
-                    {"DayNum": "9", "DayName": "Mon", "Shift": "N"},
-                    {"DayNum": "16", "DayName": "Mon", "Shift": "D2"},
-                    {"DayNum": "23", "DayName": "Mon", "Shift": "ECG"},
-                    {"DayNum": "30", "DayName": "Mon", "Shift": "M1"}
-                ]
-
+                # 3. DYNAMIC SHIFT PARSING FROM OCR TEXT
+                # Scans the OCR text for day numbers paired with shift codes
+                shift_matches = re.findall(r'\b(0?[1-9]|[12]\d|3[01])\b\s+(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)?\s*([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?)', full_text)
+                
+                seen_days = set()
                 month_short = month_name[:3]
-                for s in raw_shifts:
-                    shift_code = "VP" if s["Shift"] == "Vac PT" else s["Shift"]
-                    
-                    shift_records.append({
-                        "FullDate": f"{month_short} {s['DayNum']}, {year_str}",
-                        "DayNum": s["DayNum"],
-                        "DayName": s["DayName"],
-                        "Shift": shift_code
-                    })
+                
+                for day_str, raw_shift in shift_matches:
+                    day_num = str(int(day_str)) # Normalize '01' to '1'
+                    if day_num not in seen_days and len(raw_shift.strip()) > 0:
+                        # Filter out noise/weekdays if caught mistakenly
+                        if raw_shift.strip() not in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
+                            seen_days.add(day_num)
+                            shift_code = "VP" if "Vac" in raw_shift else raw_shift.strip()
+                            
+                            shift_records.append({
+                                "FullDate": f"{month_short} {day_num}, {year_str}",
+                                "DayNum": day_num,
+                                "Shift": shift_code
+                            })
 
-                # 3. DISPLAY PREVIEW WITH MONTH & YEAR
+                # 4. DISPLAY PREVIEW WITH MONTH & YEAR
                 st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
                 
                 if shift_records:
-                    df_extracted = pd.DataFrame(shift_records)[["FullDate", "DayName", "Shift"]]
-                    df_extracted.columns = ["Date", "Day", "Shift"]
+                    df_extracted = pd.DataFrame(shift_records)[["FullDate", "Shift"]]
                     st.write(f"Extracted Shifts Preview ({month_name} {year_str}):")
                     st.dataframe(df_extracted, hide_index=True)
 
@@ -200,9 +199,9 @@ else:
                                     
                                     for i in range(num_days):
                                         d = i + 1
-                                        col_idx = 1 + i  # Column index (0-based, starting at col B index 1)
+                                        col_idx = 1 + i
                                         dt_obj = datetime(int(year_str), month_int, d)
-                                        is_weekend = dt_obj.weekday() >= 5  # 5=Saturday, 6=Sunday
+                                        is_weekend = dt_obj.weekday() >= 5
                                         
                                         cell_format = {
                                             "borders": {
@@ -236,14 +235,12 @@ else:
                                     data = sheet.get_all_values()
                                     st.info(f"Initialized clean headers with accurate weekend shading for {target_month_header}.")
                                 else:
-                                    # Check if this specific month already exists in Row 1
                                     month_row = data[0]
                                     month_exists = any(target_month_header.lower() in cell.lower() for cell in month_row)
                                     
                                     if not month_exists:
-                                        # Append side-by-side: find next available column start index
                                         current_max_col = max(len(row) for row in data)
-                                        start_col_idx = current_max_col + 1 # 1-based index
+                                        start_col_idx = current_max_col + 1
                                         
                                         padded_data = []
                                         for row in data:
@@ -308,7 +305,7 @@ else:
                                             
                                         sheet.spreadsheet.batch_update({"requests": requests_list})
                                         data = sheet.get_all_values()
-                                        st.info(f"Appended new month columns with accurate weekend shading for **{target_month_header}** side-by-side!")
+                                        st.info(f"Appended new month columns for **{target_month_header}** side-by-side!")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
