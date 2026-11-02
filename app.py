@@ -122,7 +122,7 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. OPEN SHIFT PARSING (ACCEPTS ALL SHIFT NAMES, SKIPS STAT HOLIDAYS)
+                # 3. ROBUST SHIFT PARSING (IGNORES DATES, HOURS, & HOLIDAYS)
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
@@ -130,26 +130,31 @@ else:
                 for line in lines:
                     line_clean = line.strip()
                     
+                    # Ignore date range lines and hours/brackets
+                    if any(yr in line_clean for yr in ["2024", "2025", "2026", "2027"]) and "-" in line_clean:
+                        continue
+                    if "[" in line_clean and "]" in line_clean:
+                        continue
+                        
+                    # Skip statutory holidays and flags
                     if any(holiday_word in line_clean.lower() for holiday_word in ["remembrance", "holiday", "stat", "flag", "family day", "victoria day", "canada day", "civic", "labour", "thanksgiving", "christmas", "boxing"]):
                         continue
                         
-                    match = re.search(r'\b(0?[1-9]|[12]\d|3[01])\b\s+(.*)', line_clean)
+                    match = re.search(r'\b(0?[1-9]|[12]\d|3[01])\b\s+(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)?\s*([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?)', line_clean)
                     if match:
                         day_num = str(int(match.group(1)))
-                        shift_text = match.group(2).strip()
+                        raw_shift = match.group(2).strip()
                         
-                        shift_text = re.sub(r'^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s*', '', shift_text, flags=re.IGNORECASE)
-                        shift_text = shift_text.strip()
-                        
-                        if shift_text and not shift_text.isdigit() and day_num not in seen_days:
-                            seen_days.add(day_num)
-                            shift_code = "VP" if "Vac" in shift_text else shift_text
-                            
-                            shift_records.append({
-                                "FullDate": f"{month_short} {day_num}, {year_str}",
-                                "DayNum": day_num,
-                                "Shift": shift_code
-                            })
+                        if raw_shift and not raw_shift.isdigit() and raw_shift not in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
+                            if day_num not in seen_days:
+                                seen_days.add(day_num)
+                                shift_code = "VP" if "Vac" in raw_shift else raw_shift
+                                
+                                shift_records.append({
+                                    "FullDate": f"{month_short} {day_num}, {year_str}",
+                                    "DayNum": day_num,
+                                    "Shift": shift_code
+                                })
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
                 st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
