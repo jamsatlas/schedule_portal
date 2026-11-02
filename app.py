@@ -129,7 +129,6 @@ else:
 
                 month_short = month_name[:3]
                 for s in raw_shifts:
-                    # Replace "Vac PT" with "VP"
                     shift_code = "VP" if s["Shift"] == "Vac PT" else s["Shift"]
                     
                     shift_records.append({
@@ -150,7 +149,6 @@ else:
 
                     col_sub1, col_sub2, col_sub3 = st.columns([2.3, 1, 2.3])
                     with col_sub2:
-                        # Shortened button label so it fits fully without clipping
                         if st.button("Sync to Google Sheet"):
                             try:
                                 gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
@@ -171,4 +169,34 @@ else:
                                 
                                 # IF EMPLOYEE DOES NOT EXIST: Append new row
                                 if not emp_row_idx:
-                                    target_row_data =
+                                    target_row_data = [employee_name] + [""] * (len(day_num_row) - 1)
+                                    sheet.append_row(target_row_data)
+                                    data = sheet.get_all_values()
+                                    emp_row_idx = len(data)
+                                    st.info(f"Created new line for **{employee_name}** in Google Sheet.")
+
+                                # Update row in memory
+                                updates_count = 0
+                                while len(target_row_data) < len(day_num_row):
+                                    target_row_data.append("")
+
+                                for record in shift_records:
+                                    day_num = record["DayNum"]
+                                    for col_idx, col_val in enumerate(day_num_row):
+                                        if col_val.strip() == day_num:
+                                            target_row_data[col_idx] = record["Shift"]
+                                            updates_count += 1
+                                            break
+                                
+                                # Batch write back to Google Sheets
+                                cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
+                                sheet.update(cell_range, [target_row_data])
+                                
+                                st.success(f"Successfully updated {updates_count} shifts for **{employee_name}** in Master Sheet!")
+                            except Exception as sheet_err:
+                                st.error(f"Google Sheets sync error: {sheet_err}")
+                else:
+                    st.warning("No shift entries detected in this PDF layout.")
+                    
+            except Exception as ex:
+                st.error(f"Error processing image PDF: {ex}")
