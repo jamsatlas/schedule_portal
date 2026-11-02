@@ -121,73 +121,54 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. ROBUST BLOCK-BASED SHIFT PARSER
+                # 3. DIRECT LINE-BASED SHIFT PARSER
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
                 valid_shift_codes = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "Vac"}
 
-                current_day = None
-                block_lines = []
-                days_list = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+                # Scan through lines tracking the last seen day number
+                last_seen_day = None
 
-                def process_day(day_str, lines_list):
-                    if not day_str:
-                        return
-                    day_num = str(int(day_str))
-                    if day_num in seen_days:
-                        return
-                    
-                    block_text = " ".join(lines_list)
-                    block_lower = block_text.lower()
+                for i, line in enumerate(lines):
+                    l_str = line.strip()
                     
                     # Skip statutory holidays and time-off requests
-                    if any(term in block_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
-                        return
+                    l_lower = l_str.lower()
+                    if any(term in l_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
+                        continue
 
-                    found_shift = None
-                    for token in block_text.split():
+                    # Check if line is a standalone day number
+                    if l_str.isdigit() and 1 <= int(l_str) <= 31:
+                        last_seen_day = l_str
+                        continue
+
+                    # Check if any valid shift code appears in this line or nearby
+                    tokens = l_str.split()
+                    for token in tokens:
                         token_clean = token.strip("[](),.")
                         if token_clean in valid_shift_codes:
-                            found_shift = "VP" if token_clean in ["Vac", "VP"] else token_clean
+                            # If we found a shift code, look back or forward for the day number if not set
+                            target_day = last_seen_day
+                            if not target_day and i > 0:
+                                # Look up to 2 lines above for the day number
+                                for lookback in range(1, 3):
+                                    prev_line = lines[i - lookback].strip()
+                                    if prev_line.isdigit() and 1 <= int(prev_line) <= 31:
+                                        target_day = prev_line
+                                        break
+
+                            if target_day:
+                                day_num = str(int(target_day))
+                                if day_num not in seen_days:
+                                    seen_days.add(day_num)
+                                    shift_code = "VP" if token_clean in ["Vac", "VP"] else token_clean
+                                    shift_records.append({
+                                        "FullDate": f"{month_short} {day_num}, {year_str}",
+                                        "DayNum": day_num,
+                                        "Shift": shift_code
+                                    })
                             break
-                    
-                    if not found_shift:
-                        for token in block_text.split():
-                            token_clean = token.strip("[](),.")
-                            if token_clean.isupper() and 2 <= len(token_clean) <= 5 and not token_clean.isdigit():
-                                if token_clean not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB"]:
-                                    found_shift = token_clean
-                                    break
-
-                    if found_shift:
-                        seen_days.add(day_num)
-                        shift_records.append({
-                            "FullDate": f"{month_short} {day_num}, {year_str}",
-                            "DayNum": day_num,
-                            "Shift": found_shift
-                        })
-
-                for line in lines:
-                    l_str = line.strip()
-                    if "-" in l_str and any(yr in l_str for yr in ["2024", "2025", "2026", "2027"]):
-                        if current_day:
-                            process_day(current_day, block_lines)
-                            current_day = None
-                            block_lines = []
-                        continue
-                    if l_str in days_list:
-                        continue
-                    if l_str.isdigit() and 1 <= int(l_str) <= 31:
-                        if current_day:
-                            process_day(current_day, block_lines)
-                        current_day = l_str
-                        block_lines = []
-                    elif current_day:
-                        block_lines.append(l_str)
-
-                if current_day:
-                    process_day(current_day, block_lines)
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
                 st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
@@ -271,148 +252,4 @@ else:
                                                 "endColumnIndex": col_idx + 1
                                             },
                                             "cell": {"userEnteredFormat": cell_format},
-                                            "fields": fields_str
-                                        }
-                                    })
-                                    
-                                sheet.spreadsheet.batch_update({"requests": requests_list})
-                                data = sheet.get_all_values()
-                                st.info(f"Initialized clean headers with accurate weekend shading for {target_month_header}.")
-                            else:
-                                month_row = data[0]
-                                month_exists = any(target_month_header.lower() in cell.lower() for cell in month_row)
-                                
-                                if not month_exists:
-                                    current_max_col = max(len(row) for row in data)
-                                    start_col_idx = current_max_col + 1
-                                    
-                                    for row in data:
-                                        while len(row) < current_max_col + 1 + num_days:
-                                            row.append("")
-                                    
-                                    start_col_letter = gspread.utils.rowcol_to_a1(1, start_col_idx)[0]
-                                    end_col_idx = start_col_idx + num_days - 1
-                                    
-                                    sheet.update(f"{start_col_letter}1", [[target_month_header] + [""] * (num_days - 1)])
-                                    sheet.update(f"{start_col_letter}2", [[str(d) for d in range(1, num_days + 1)]])
-                                    
-                                    requests_list = [
-                                        {
-                                            "updateDimensionProperties": {
-                                                "range": {
-                                                    "sheetId": sheet.id,
-                                                    "dimension": "COLUMNS",
-                                                    "startIndex": start_col_idx - 1,
-                                                    "endIndex": end_col_idx
-                                                },
-                                                "properties": {"pixelSize": 35},
-                                                "fields": "pixelSize"
-                                            }
-                                        }
-                                    ]
-                                    
-                                    for i in range(num_days):
-                                        d = i + 1
-                                        col_idx = (start_col_idx - 1) + i
-                                        dt_obj = datetime(int(year_str), month_int, d)
-                                        is_weekend = dt_obj.weekday() >= 5
-                                        
-                                        cell_format = {
-                                            "borders": {
-                                                "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
-                                            }
-                                        }
-                                        fields_str = "userEnteredFormat.borders"
-                                        
-                                        if is_weekend:
-                                            cell_format["backgroundColor"] = {"red": 0.85, "green": 0.85, "blue": 0.85}
-                                            fields_str += ",userEnteredFormat.backgroundColor"
-                                            
-                                        requests_list.append({
-                                            "repeatCell": {
-                                                "range": {
-                                                    "sheetId": sheet.id,
-                                                    "startRowIndex": 0,
-                                                    "endRowIndex": 100,
-                                                    "startColumnIndex": col_idx,
-                                                    "endColumnIndex": col_idx + 1
-                                                },
-                                                "cell": {"userEnteredFormat": cell_format},
-                                                "fields": fields_str
-                                            }
-                                        })
-                                        
-                                    sheet.spreadsheet.batch_update({"requests": requests_list})
-                                    data = sheet.get_all_values()
-                                    st.info(f"Appended new month columns with accurate weekend shading for **{target_month_header}** side-by-side!")
-
-                            month_row = data[0] if len(data) > 0 else []
-                            day_num_row = data[1] if len(data) > 1 else []
-                            max_cols = max(len(month_row), len(day_num_row))
-                            
-                            emp_row_idx = None
-                            target_row_data = None
-                            for idx, row in enumerate(data):
-                                if idx >= 2 and row and employee_name.lower() in row[0].lower():
-                                    emp_row_idx = idx + 1
-                                    target_row_data = list(row)
-                                    break
-                            
-                            if not emp_row_idx:
-                                target_row_data = [employee_name] + [""] * (max_cols - 1)
-                                sheet.append_row(target_row_data)
-                                data = sheet.get_all_values()
-                                emp_row_idx = len(data)
-                                st.info(f"Created new line for {employee_name} in Google Sheet.")
-                                target_row_data = list(data[emp_row_idx - 1])
-
-                            while len(target_row_data) < max_cols:
-                                target_row_data.append("")
-
-                            updates_count = 0
-                            current_active_month = month_name
-                            
-                            for record in shift_records:
-                                target_day = record["DayNum"]
-                                record_month_short = record["FullDate"].split()[0]
-                                record_month_full = datetime.strptime(record_month_short, '%b').strftime('%B')
-                                
-                                matched_col_idx = None
-                                active_month_tracker = current_active_month
-                                
-                                for col_idx in range(1, max_cols):
-                                    if col_idx < len(month_row) and month_row[col_idx].strip():
-                                        cell_val = month_row[col_idx].strip()
-                                        if any(m in cell_val for m in ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]):
-                                            active_month_tracker = cell_val
-                                    
-                                    if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
-                                        if record_month_full.lower() in active_month_tracker.lower():
-                                            matched_col_idx = col_idx
-                                            break
-                                
-                                if matched_col_idx is None:
-                                    for col_idx in range(1, max_cols):
-                                        if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
-                                            matched_col_idx = col_idx
-                                            break
-
-                                if matched_col_idx is not None:
-                                    target_row_data[matched_col_idx] = record["Shift"]
-                                    updates_count += 1
-
-                            cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
-                            sheet.update(cell_range, [target_row_data])
-                            
-                            st.success(f"Successfully updated {updates_count} shifts for {employee_name} in Master Sheet!")
-                        except Exception as sheet_err:
-                            err_details = traceback.format_exc()
-                            st.error(f"Google Sheets sync error:\n{err_details}")
-                else:
-                    st.warning("No shift entries detected in this PDF schedule.")
-                    
-            except Exception as ex:
-                st.error(f"Error processing PDF: {ex}")
+                                            "fields":
