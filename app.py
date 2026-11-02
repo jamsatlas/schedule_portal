@@ -178,42 +178,56 @@ else:
                                     month_int = datetime.strptime(month_name, '%B').month
                                     num_days = monthrange(int(year_str), month_int)[1]
                                     
-                                    # Row 1: Month/Year header starting in B1
-                                    row1 = ["LHO - Phleb. / CR", f"{month_name} {year_str}"] + [""] * (num_days - 1)
+                                    # Row 1: Blank in A1, Month/Year header starting in B1
+                                    row1 = ["", f"{month_name} {year_str}"] + [""] * (num_days - 1)
                                     # Row 2: Employee Name in A2, Day numbers (1 to 31) starting in B2
                                     row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
                                     
                                     sheet.update("A1", [row1, row2])
                                     
-                                    # Border formatting definition
-                                    border_style = {
-                                        "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                        "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                        "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                        "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
+                                    # Batch update request for compact column widths (35px) and solid borders
+                                    body = {
+                                        "requests": [
+                                            {
+                                                "updateDimensionProperties": {
+                                                    "range": {
+                                                        "sheetId": sheet.id,
+                                                        "dimension": "COLUMNS",
+                                                        "startIndex": 1,
+                                                        "endIndex": 2 + num_days
+                                                    },
+                                                    "properties": {"pixelSize": 35},
+                                                    "fields": "pixelSize"
+                                                }
+                                            },
+                                            {
+                                                "repeatCell": {
+                                                    "range": {
+                                                        "sheetId": sheet.id,
+                                                        "startRowIndex": 0,
+                                                        "endRowIndex": 100,
+                                                        "startColumnIndex": 1,
+                                                        "endColumnIndex": 1 + num_days
+                                                    },
+                                                    "cell": {
+                                                        "userEnteredFormat": {
+                                                            "borders": {
+                                                                "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                                "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                                "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                                "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
+                                                            }
+                                                        }
+                                                    },
+                                                    "fields": "userEnteredFormat.borders"
+                                                }
+                                            }
+                                        ]
                                     }
-
-                                    # Resize date columns B onwards to 35px in bulk
-                                    sheet.set_column_width(2, 1 + num_days, 35)
-
-                                    # Apply borders & weekend shading across date columns
-                                    for col_idx in range(2, 2 + num_days):
-                                        col_letter = gspread.utils.rowcol_to_a1(1, col_idx)[0]
-                                        
-                                        # Base borders across grid range
-                                        sheet.format(f"{col_letter}1:{col_letter}100", {"borders": border_style})
-                                        
-                                        # Weekend shading (Saturday or Sunday)
-                                        d = col_idx - 1
-                                        dt_obj = datetime(int(year_str), month_int, d)
-                                        if dt_obj.weekday() >= 5:
-                                            sheet.format(f"{col_letter}1:{col_letter}100", {
-                                                "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85},
-                                                "borders": border_style
-                                            })
-                                        
+                                    gc.batch_update(sheet.spreadsheet.id, body)
+                                    
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized clean 2-row headers with compact cells and weekend shading for **{month_name} {year_str}**.")
+                                    st.info(f"Initialized clean headers for **{month_name} {year_str}**.")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
