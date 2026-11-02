@@ -4,6 +4,7 @@ import pandas as pd
 import gspread
 import re
 import json
+import traceback
 from pdf2image import convert_from_bytes
 import pytesseract
 from datetime import datetime
@@ -206,10 +207,10 @@ else:
                                 
                                 st.success(f"Successfully updated {updates_count} shifts for **{employee_name}** in Master Sheet!")
                             except Exception as sheet_err:
-                                st.error(f"Google Sheets sync error: {str(sheet_err)}")
+                                err_details = traceback.format_exc()
+                                st.error(f"Google Sheets sync error:\n```python\n{err_details}\n```")
                 else:
                     st.warning("No shift entries detected in this PDF layout.")
                     
-            except Exception as sheet_err:
-                                import traceback
-                                st.error(f"Detailed Error:\n```python\n{traceback.format_exc()}\n```")
+            except Exception as ex:
+                st.error(f"Error processing image PDF: {ex}")
