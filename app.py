@@ -86,7 +86,7 @@ else:
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("Reading PDF schedule spatial layout and extracting shifts...")
+            st.info("Reading PDF schedule layout and extracting shifts...")
             
             try:
                 employee_name = None
@@ -130,15 +130,11 @@ else:
                 month_short = month_name[:3]
                 valid_shifts = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "VAC"}
 
-                # 3. SPATIAL COORDINATE PARSING
-                # Groups words by vertical position (Y-tolerance) to inspect elements on the same calendar row
+                # 3. SPATIAL & PROXIMITY EXTRACTION FOR MULTI-PAGE LAYOUTS
                 seen_days = set()
 
                 for page_words in words_by_page:
-                    # Sort words top-to-bottom, left-to-right
                     sorted_words = sorted(page_words, key=lambda w: (w['top'], w['x0']))
-                    
-                    # Group words into rough horizontal lines based on 'top' coordinate (tolerance ~ 10px)
                     lines_grouped = []
                     current_line = []
                     last_top = None
@@ -154,24 +150,20 @@ else:
                     if current_line:
                         lines_grouped.append(current_line)
 
-                    # Scan grouped lines for day numbers and nearby shift codes
                     for line in lines_grouped:
                         line_text_tokens = [w['text'].strip("[](),.") for w in line]
                         line_str = " ".join(line_text_tokens)
                         line_lower = line_str.lower()
 
-                        # Skip holidays and approved time-off request banners
                         if any(term in line_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu", "laboratory", "technologist", "0714"]):
                             continue
 
-                        # Check if any word in the line is a day number (1-31)
                         day_num_found = None
                         for token in line_text_tokens:
                             if token.isdigit() and 1 <= int(token) <= 31:
                                 day_num_found = str(int(token))
                                 break
 
-                        # Check if any word in the line is a valid shift code
                         shift_found = None
                         for token in line_text_tokens:
                             t_upper = token.upper()
@@ -188,8 +180,6 @@ else:
                                     "Shift": shift_found
                                 })
 
-                # Secondary multi-line spatial proximity check for split calendar cells
-                # This ensures if the shift code is on the line right below the day number, it's captured
                 flat_tokens = []
                 for page_words in words_by_page:
                     sorted_w = sorted(page_words, key=lambda w: (w['top'], w['x0']))
@@ -200,7 +190,6 @@ else:
                     if token.isdigit() and 1 <= int(token) <= 31:
                         d_num = str(int(token))
                         if d_num not in seen_days:
-                            # Look ahead up to 5 tokens for a valid shift code
                             for offset in range(1, 6):
                                 if i + offset < len(flat_tokens):
                                     candidate = flat_tokens[i + offset].upper()
@@ -247,7 +236,6 @@ else:
                             month_int = datetime.strptime(month_name, '%B').month
                             num_days = monthrange(int(year_str), month_int)[1]
                             
-                            # Check if sheet is completely blank
                             if len(data) < 2 or not data[0] or data[0][0] == "":
                                 row1 = ["", target_month_header] + [""] * (num_days - 1)
                                 row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
@@ -305,7 +293,6 @@ else:
                                     
                                 sheet.spreadsheet.batch_update({"requests": requests_list})
                                 data = sheet.get_all_values()
-                                st.info(f"Initialized clean headers with accurate weekend shading for {target_month_header}.")
                             else:
                                 month_row = data[0]
                                 month_exists = any(target_month_header.lower() in cell.lower() for cell in month_row)
@@ -353,4 +340,92 @@ else:
                                                 "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
                                             }
                                         }
-                                        fields_str = "userEnteredFormat.borders
+                                        fields_str = "userEnteredFormat.borders"
+                                        
+                                        if is_weekend:
+                                            cell_format["backgroundColor"] = {"red": 0.85, "green": 0.85, "blue": 0.85}
+                                            fields_str += ",userEnteredFormat.backgroundColor"
+                                            
+                                        requests_list.append({
+                                            "repeatCell": {
+                                                "range": {
+                                                    "sheetId": sheet.id,
+                                                    "startRowIndex": 0,
+                                                    "endRowIndex": 100,
+                                                    "startColumnIndex": col_idx,
+                                                    "endColumnIndex": col_idx + 1
+                                                },
+                                                "cell": {"userEnteredFormat": cell_format},
+                                                "fields": fields_str
+                                            }
+                                        })
+                                        
+                                    sheet.spreadsheet.batch_update({"requests": requests_list})
+                                    data = sheet.get_all_values()
+
+                            month_row = data[0] if len(data) > 0 else []
+                            day_num_row = data[1] if len(data) > 1 else []
+                            max_cols = max(len(month_row), len(day_num_row))
+                            
+                            emp_row_idx = None
+                            target_row_data = None
+                            for idx, row in enumerate(data):
+                                if idx >= 2 and row and employee_name.lower() in row[0].lower():
+                                    emp_row_idx = idx + 1
+                                    target_row_data = list(row)
+                                    break
+                            
+                            if not emp_row_idx:
+                                target_row_data = [employee_name] + [""] * (max_cols - 1)
+                                sheet.append_row(target_row_data)
+                                data = sheet.get_all_values()
+                                emp_row_idx = len(data)
+                                target_row_data = list(data[emp_row_idx - 1])
+
+                            while len(target_row_data) < max_cols:
+                                target_row_data.append("")
+
+                            updates_count = 0
+                            current_active_month = month_name
+                            
+                            for record in shift_records:
+                                target_day = record["DayNum"]
+                                record_month_short = record["FullDate"].split()[0]
+                                record_month_full = datetime.strptime(record_month_short, '%b').strftime('%B')
+                                
+                                matched_col_idx = None
+                                active_month_tracker = current_active_month
+                                
+                                for col_idx in range(1, max_cols):
+                                    if col_idx < len(month_row) and month_row[col_idx].strip():
+                                        cell_val = month_row[col_idx].strip()
+                                        if any(m in cell_val for m in ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]):
+                                            active_month_tracker = cell_val
+                                    
+                                    if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
+                                        if record_month_full.lower() in active_month_tracker.lower():
+                                            matched_col_idx = col_idx
+                                            break
+                                
+                                if matched_col_idx is None:
+                                    for col_idx in range(1, max_cols):
+                                        if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
+                                            matched_col_idx = col_idx
+                                            break
+
+                                if matched_col_idx is not None:
+                                    target_row_data[matched_col_idx] = record["Shift"]
+                                    updates_count += 1
+
+                            cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
+                            sheet.update(cell_range, [target_row_data])
+                            
+                            st.success(f"Successfully updated {updates_count} shifts for {employee_name} in Master Sheet!")
+                        except Exception as sheet_err:
+                            err_details = traceback.format_exc()
+                            st.error(f"Google Sheets sync error:\n{err_details}")
+                else:
+                    st.warning("No shift entries detected in this PDF schedule.")
+                    
+            except Exception as ex:
+                st.error(f"Error processing spatial PDF: {ex}")
