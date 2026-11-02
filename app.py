@@ -165,7 +165,3 @@ else:
                                 
                                 if "private_key" in cred_dict:
                                     pk = cred_dict["private_key"]
-                                    pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
-                                    cred_dict["private_key"] = pk
-
-                                gc = gspread.service_account_from_
