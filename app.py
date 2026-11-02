@@ -152,10 +152,16 @@ else:
                     with col_sub2:
                         if st.button("Sync to Google Sheet"):
                             try:
-                                cred_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS_JSON"])
+                                raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+                                if isinstance(raw_secret, str):
+                                    cred_dict = json.loads(raw_secret)
+                                else:
+                                    cred_dict = dict(raw_secret)
                                 
                                 if "private_key" in cred_dict:
-                                    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+                                    pk = cred_dict["private_key"]
+                                    pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
+                                    cred_dict["private_key"] = pk
 
                                 gc = gspread.service_account_from_dict(cred_dict)
                                 sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
@@ -200,7 +206,7 @@ else:
                                 
                                 st.success(f"Successfully updated {updates_count} shifts for **{employee_name}** in Master Sheet!")
                             except Exception as sheet_err:
-                                st.error(f"Google Sheets sync error: {sheet_err}")
+                                st.error(f"Google Sheets sync error: {str(sheet_err)}")
                 else:
                     st.warning("No shift entries detected in this PDF layout.")
                     
