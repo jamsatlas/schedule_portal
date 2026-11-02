@@ -62,7 +62,7 @@ else:
         st.markdown("<h3 style='text-align: center;'>Upload Individual UKG Schedule PDF</h3>", unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
         if uploaded_file is not None:
-            st.info("Reading PDF schedule layout and extracting shifts dynamically...")
+            st.info("Reading PDF schedule layout and extracting shifts universally...")
             try:
                 reader = PdfReader(uploaded_file)
                 full_text = ""
@@ -108,43 +108,39 @@ else:
 
                 valid_shifts = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "VAC"}
 
-                # 3. Universal Grid Parser
-                # Filters day numbers strictly by column X position to ignore date range header numbers
-                days_detected = []
-                for el in extracted_elements:
-                    t = el["text"]
-                    if t.isdigit() and 1 <= int(t) <= 31:
-                        # Day numbers in UKG calendars sit in specific column bounds
-                        if (el["x"] < 70 or (540 < el["x"] < 580)) and el["y"] > 120:
-                            days_detected.append({
-                                "day": int(t),
-                                "y": el["y"],
-                                "x": el["x"]
-                            })
-
-                days_detected = sorted(days_detected, key=lambda d: d["y"])
+                # 3. Universal Column-Aligned Pairing Parser
                 shift_records = []
                 seen_days = set()
 
-                for d_info in days_detected:
-                    day_num = d_info["day"]
+                days = []
+                shifts = []
+                for el in extracted_elements:
+                    t = el["text"]
+                    if t.isdigit() and 1 <= int(t) <= 31:
+                        if el["y"] > 100:
+                            days.append(el)
+                    elif t.upper() in valid_shifts:
+                        shifts.append(el)
+
+                for d in sorted(days, key=lambda d: d["y"]):
+                    day_num = int(d["text"])
                     if day_num in seen_days:
                         continue
-                    dy = d_info["y"]
-                    dx = d_info["x"]
                     
-                    # Search for a valid shift code vertically below the day number (within 70 pixels)
-                    matching_shifts = []
-                    for el in extracted_elements:
-                        if 0 <= (el["y"] - dy) <= 70:
-                            if (dx < 100 and 100 < el["x"] < 300) or (dx > 500 and 600 < el["x"] < 800):
-                                t_upper = el["text"].upper()
-                                if t_upper in valid_shifts:
-                                    matching_shifts.append((el["y"], t_upper))
-
-                    if matching_shifts:
-                        matching_shifts.sort(key=lambda item: item[0])
-                        s_code = matching_shifts[0][1]
+                    dx = d["x"]
+                    dy = d["y"]
+                    
+                    matching = []
+                    for s in shifts:
+                        sx = s["x"]
+                        sy = s["y"]
+                        if 0 <= (sy - dy) <= 65:
+                            if (dx < 100 and abs(sx - 138) < 30) or (dx > 500 and abs(sx - 643.5) < 30):
+                                matching.append((sy, s["text"].upper()))
+                    
+                    if matching:
+                        matching.sort(key=lambda item: item[0])
+                        s_code = matching[0][1]
                         seen_days.add(day_num)
                         shift_records.append({
                             "FullDate": f"{month_short} {day_num}, {year_str}",
