@@ -92,7 +92,7 @@ else:
                 employee_name = None
                 shift_records = []
                 
-                # Extract text directly using pdfplumber
+                # Extract text directly using pdfplumber across all pages
                 full_text = ""
                 with pdfplumber.open(uploaded_file) as pdf:
                     for page in pdf.pages:
@@ -125,62 +125,69 @@ else:
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
+                valid_shift_codes = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "Vac"}
 
                 current_day = None
-                day_content = []
+                block_lines = []
                 days_list = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
-                def parse_and_add_shift(day_str, content):
+                def process_day(day_str, lines_list):
+                    if not day_str:
+                        return
                     day_num = str(int(day_str))
                     if day_num in seen_days:
                         return
                     
+                    block_text = " ".join(lines_list)
+                    block_lower = block_text.lower()
+                    
                     # Skip statutory holidays and time-off requests
-                    content_lower = content.lower()
-                    if any(term in content_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
+                    if any(term in block_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
                         return
 
-                    tokens = content.split()
-                    shift_code = None
-                    
-                    for token in tokens:
-                        if ":" in token or "[" in token or "]" in token or token.isdigit() or len(token) > 10:
-                            continue
-                        if token in days_list or token in ["LHC", "OSH", "LAB", "Technologist"]:
-                            continue
-                        # Match standard UKG shift codes
-                        if token in ["EC", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "Vac"]:
-                            shift_code = "VP" if "Vac" in token else token
+                    found_shift = None
+                    for token in block_text.split():
+                        token_clean = token.strip("[](),.")
+                        if token_clean in valid_shift_codes:
+                            found_shift = "VP" if token_clean in ["Vac", "VP"] else token_clean
                             break
                     
-                    if not shift_code and tokens:
-                        for token in tokens:
-                            if not any(char.isdigit() for char in token) and token not in days_list and token not in ["LHC", "OSH", "LAB", "Technologist"]:
-                                shift_code = token
-                                break
+                    if not found_shift:
+                        for token in block_text.split():
+                            token_clean = token.strip("[](),.")
+                            if token_clean.isupper() and 2 <= len(token_clean) <= 5 and not token_clean.isdigit():
+                                if token_clean not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB"]:
+                                    found_shift = token_clean
+                                    break
 
-                    if shift_code:
+                    if found_shift:
                         seen_days.add(day_num)
                         shift_records.append({
                             "FullDate": f"{month_short} {day_num}, {year_str}",
                             "DayNum": day_num,
-                            "Shift": shift_code
+                            "Shift": found_shift
                         })
 
                 for line in lines:
                     l_str = line.strip()
+                    if "-" in l_str and any(yr in l_str for yr in ["2024", "2025", "2026", "2027"]):
+                        if current_day:
+                            process_day(current_day, block_lines)
+                            current_day = None
+                            block_lines = []
+                        continue
                     if l_str in days_list:
                         continue
                     if l_str.isdigit() and 1 <= int(l_str) <= 31:
-                        if current_day and day_content:
-                            parse_and_add_shift(current_day, " ".join(day_content))
+                        if current_day:
+                            process_day(current_day, block_lines)
                         current_day = l_str
-                        day_content = []
+                        block_lines = []
                     elif current_day:
-                        day_content.append(l_str)
+                        block_lines.append(l_str)
 
-                if current_day and day_content:
-                    parse_and_add_shift(current_day, " ".join(day_content))
+                if current_day:
+                    process_day(current_day, block_lines)
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
                 st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
