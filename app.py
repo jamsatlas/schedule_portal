@@ -81,7 +81,7 @@ else:
                         full_text += ext + "\n"
 
                 # 1. Dynamic Employee Name Extraction
-                name_match = re.search(r'(?:JR|SJ|Employee|Name|Schedule for)[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
+                name_match = re.search(r'(?:JR|SJ|AM|MK|JS|DB|Employee|Name|Schedule for)[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
                 else:
@@ -106,23 +106,19 @@ else:
                     month_name = datetime(2026, month_num, 1).strftime('%B')
                 month_short = month_name[:3]
 
-                valid_shifts = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "VAC"}
-
-                # 3. Universal Relaxed Proximity Parser (Works for any employee without coordinate restrictions)
-                shift_records = []
-                seen_days = set()
-
-                days = []
-                shifts = []
+                # 3. Dynamic Text-Proximity Shift Extraction
+                days_detected = []
                 for el in extracted_elements:
                     t = el["text"]
                     if t.isdigit() and 1 <= int(t) <= 31:
                         if el["y"] > 90:
-                            days.append(el)
-                    elif t.upper() in valid_shifts:
-                        shifts.append(el)
+                            days_detected.append(el)
 
-                for d in sorted(days, key=lambda d: d["y"]):
+                sorted_elements = sorted(extracted_elements, key=lambda e: e["y"])
+                shift_records = []
+                seen_days = set()
+
+                for d in sorted(days_detected, key=lambda d: d["y"]):
                     day_num = int(d["text"])
                     if day_num in seen_days:
                         continue
@@ -130,22 +126,23 @@ else:
                     dy = d["y"]
                     dx = d["x"]
                     
-                    matching = []
-                    for s in shifts:
-                        sy = s["y"]
-                        sx = s["x"]
-                        if 0 <= (sy - dy) <= 100:
-                            if abs(sx - dx) < 600:
-                                matching.append((abs(sy - dy), sy, s["text"].upper()))
-                    
-                    if matching:
-                        matching.sort(key=lambda item: item[0])
-                        s_code = matching[0][2]
+                    candidate_shifts = []
+                    for other in sorted_elements:
+                        sy = other["y"]
+                        sx = other["x"]
+                        if 0 < (sy - dy) <= 75 and abs(sx - dx) < 600:
+                            txt = other["text"].strip()
+                            if not re.match(r'^\d{2}:\d{2}', txt) and not any(noise in txt.lower() for noise in ["lhc", "osh", "lab", "technologist", "swap", "opseu", "remembrance", "0714", "0715"]):
+                                candidate_shifts.append((sy, txt))
+
+                    if candidate_shifts:
+                        candidate_shifts.sort(key=lambda item: item[0])
+                        s_code = candidate_shifts[0][1]
                         seen_days.add(day_num)
                         shift_records.append({
                             "FullDate": f"{month_short} {day_num}, {year_str}",
                             "DayNum": str(day_num),
-                            "Shift": "VP" if s_code in ["VAC", "VP"] else s_code
+                            "Shift": "VP" if any(v in s_code.upper() for v in ["VAC", "VP"]) else s_code
                         })
 
                 shift_records = sorted(shift_records, key=lambda x: int(x["DayNum"]))
