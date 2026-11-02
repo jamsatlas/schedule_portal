@@ -32,6 +32,10 @@ TIME_OFF_CODE = "V"
 CODE_ALIASES = {
     "MI": "M1",
     "M I": "M1",
+    "MMI": "M1",
+    "MMi": "M1",
+    "mMi": "M1",
+    "mMI": "M1",
     "E N": "N",
     "EN": "N",
     "VAC PT": "V",
@@ -198,18 +202,18 @@ def _looks_like_code(t):
 
 def _normalize_code(raw):
     code = raw.strip()
-    up = re.sub(r"\s+", " ", code.upper())
+    up = re.sub(r"\s+", "", code.upper())
     
     if up in CODE_ALIASES:
         return CODE_ALIASES[up]
         
-    # Handle "e N" / "E N" / "eN" OCR variations -> "N"
-    if re.fullmatch(r"E\s*N", up, re.I):
-        return "N"
-        
-    # Handle "Mi" / "M i" / "M1" OCR variations -> "M1"
-    if re.fullmatch(r"M\s*[I1i]", code, re.I):
+    # Handle "mMi", "MMi", "MMI", "mMI", "Mi", "M i", "M1" OCR variations -> "M1"
+    if re.fullmatch(r"M+[I1i]", up, re.I) or re.fullmatch(r"M\s*M?\s*[I1i]", raw, re.I):
         return "M1"
+
+    # Handle "e N" / "E N" / "eN" OCR variations -> "N"
+    if re.fullmatch(r"E*N", up, re.I):
+        return "N"
         
     if up.startswith("VAC") or up in ("VP", "TO", "V"):
         return "V"
