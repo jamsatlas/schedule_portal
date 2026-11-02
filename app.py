@@ -152,4 +152,101 @@ else:
                             })
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
-                st
+                st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
+                
+                if shift_records:
+                    df_extracted = pd.DataFrame(shift_records)[["FullDate", "Shift"]]
+                    df_extracted.columns = ["Date", "Shift"]
+                    st.write(f"Extracted Shifts Preview ({month_name} {year_str}):")
+                    st.dataframe(df_extracted, hide_index=True)
+
+                    if st.button("Sync to Google Sheet"):
+                        try:
+                            raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+                            if isinstance(raw_secret, str):
+                                cred_dict = json.loads(raw_secret)
+                            else:
+                                cred_dict = dict(raw_secret)
+                            
+                            if "private_key" in cred_dict:
+                                pk = cred_dict["private_key"]
+                                pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
+                                cred_dict["private_key"] = pk
+
+                            gc = gspread.service_account_from_dict(cred_dict)
+                            sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
+                            
+                            data = sheet.get_all_values()
+                            target_month_header = f"{month_name} {year_str}"
+                            month_int = datetime.strptime(month_name, '%B').month
+                            num_days = monthrange(int(year_str), month_int)[1]
+                            
+                            # Check if sheet is completely blank
+                            if len(data) < 2 or not data[0] or data[0][0] == "":
+                                row1 = ["", target_month_header] + [""] * (num_days - 1)
+                                row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
+                                
+                                sheet.update("A1", [row1, row2])
+                                
+                                requests_list = [
+                                    {
+                                        "updateDimensionProperties": {
+                                            "range": {
+                                                "sheetId": sheet.id,
+                                                "dimension": "COLUMNS",
+                                                "startIndex": 1,
+                                                "endIndex": 2 + num_days
+                                            },
+                                            "properties": {"pixelSize": 35},
+                                            "fields": "pixelSize"
+                                        }
+                                    }
+                                ]
+                                
+                                for i in range(num_days):
+                                    d = i + 1
+                                    col_idx = 1 + i
+                                    dt_obj = datetime(int(year_str), month_int, d)
+                                    is_weekend = dt_obj.weekday() >= 5
+                                    
+                                    cell_format = {
+                                        "borders": {
+                                            "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                            "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                            "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                            "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
+                                        }
+                                    }
+                                    fields_str = "userEnteredFormat.borders"
+                                    
+                                    if is_weekend:
+                                        cell_format["backgroundColor"] = {"red": 0.85, "green": 0.85, "blue": 0.85}
+                                        fields_str += ",userEnteredFormat.backgroundColor"
+                                        
+                                    requests_list.append({
+                                        "repeatCell": {
+                                            "range": {
+                                                "sheetId": sheet.id,
+                                                "startRowIndex": 0,
+                                                "endRowIndex": 100,
+                                                "startColumnIndex": col_idx,
+                                                "endColumnIndex": col_idx + 1
+                                            },
+                                            "cell": {"userEnteredFormat": cell_format},
+                                            "fields": fields_str
+                                        }
+                                    })
+                                    
+                                sheet.spreadsheet.batch_update({"requests": requests_list})
+                                data = sheet.get_all_values()
+                                st.info(f"Initialized clean headers with accurate weekend shading for {target_month_header}.")
+                            else:
+                                month_row = data[0]
+                                month_exists = any(target_month_header.lower() in cell.lower() for cell in month_row)
+                                
+                                if not month_exists:
+                                    current_max_col = max(len(row) for row in data)
+                                    start_col_idx = current_max_col + 1
+                                    
+                                    for row in data:
+                                        while len(row) < current_max_col +
