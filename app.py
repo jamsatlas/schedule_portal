@@ -210,5 +210,6 @@ else:
                 else:
                     st.warning("No shift entries detected in this PDF layout.")
                     
-            except Exception as ex:
-                st.error(f"Error processing image PDF: {ex}")
+            except Exception as sheet_err:
+                                import traceback
+                                st.error(f"Detailed Error:\n```python\n{traceback.format_exc()}\n```")
