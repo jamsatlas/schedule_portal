@@ -115,73 +115,82 @@ else:
                             num_days = monthrange(start_date.year, month_int)[1]
 
                             # 1. Initialize sheet if completely empty
-                            if len(data) < 2 or not data[0] or data[0][0] == "":
-                                row1 = ["", target_month_header] + [""] * (num_days - 1)
-                                row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
-                                sheet.update("A1", [row1, row2])
+                            if len(data) < 2:
+                                sheet.update("A1:A2", [[""], ["Employee Name"]])
                                 data = sheet.get_all_values()
                                 
-                            month_row = data[0]
-                            day_num_row = data[1]
+                            row1_month = data[0]
+                            row2_days = data[1] if len(data) > 1 else []
                             
-                            # 2. Find if the target month already exists in Row 1.
+                            # 2. Find exact starting column for this month
                             month_start_col = -1
-                            for col_idx, header in enumerate(month_row):
-                                if target_month_header in header:
+                            for col_idx, header in enumerate(row1_month):
+                                if target_month_header.lower() in header.lower():
                                     month_start_col = col_idx
                                     break
                                     
                             if month_start_col == -1:
-                                # Month doesn't exist, append horizontally
-                                last_col_idx = len(day_num_row)
+                                # Month doesn't exist, strictly append it to the right of the last recorded day
+                                last_day_col = 0
+                                for i, val in enumerate(row2_days):
+                                    if val.strip() != "":
+                                        last_day_col = i
+                                        
+                                month_start_col = max(1, last_day_col + 1)
                                 
-                                ext_row1 = [""] * (last_col_idx - len(month_row)) + [target_month_header] + [""] * (num_days - 1)
-                                sheet.update(f"{gspread.utils.rowcol_to_a1(1, len(month_row) + 1)}", [ext_row1])
+                                # Write Month Header
+                                sheet.update(gspread.utils.rowcol_to_a1(1, month_start_col + 1), [[target_month_header]])
                                 
-                                ext_row2 = [""] * (last_col_idx - len(day_num_row)) + [str(d) for d in range(1, num_days + 1)]
-                                sheet.update(f"{gspread.utils.rowcol_to_a1(2, len(day_num_row) + 1)}", [ext_row2])
+                                # Write Day Numbers (1 to 30/31)
+                                days_list = [str(d) for d in range(1, num_days + 1)]
+                                sheet.update(gspread.utils.rowcol_to_a1(2, month_start_col + 1), [days_list])
                                 
+                                # Refresh data
                                 data = sheet.get_all_values()
-                                month_row = data[0]
-                                day_num_row = data[1]
-                                month_start_col = len(day_num_row) - num_days
+                                row2_days = data[1]
 
                             # 3. Ensure employee row exists
-                            emp_row_idx = None
-                            for idx, row in enumerate(data):
-                                if idx >= 2 and row and employee_name.lower() in row[0].lower():
-                                    emp_row_idx = idx + 1
+                            emp_row_idx = -1
+                            target_row_data = []
+                            for idx in range(2, len(data)):
+                                row = data[idx]
+                                if len(row) > 0 and employee_name.lower() in row[0].lower():
+                                    emp_row_idx = idx
                                     target_row_data = list(row)
                                     break
 
-                            if not emp_row_idx:
-                                target_row_data = [employee_name] + [""] * (len(day_num_row) - 1)
-                                sheet.append_row(target_row_data)
-                                data = sheet.get_all_values()
+                            if emp_row_idx == -1:
+                                # Add new employee
                                 emp_row_idx = len(data)
-                                target_row_data = list(data[emp_row_idx - 1])
+                                target_row_data = [employee_name]
+                                sheet.update(f"A{emp_row_idx + 1}", [[employee_name]])
 
-                            while len(target_row_data) < len(day_num_row):
+                            # Pad in-memory row up to the end of this month's columns
+                            end_col = month_start_col + num_days
+                            while len(target_row_data) < end_col:
                                 target_row_data.append("")
 
-                            # 4. Map shifts to the exact correct column for THIS month
+                            # 4. Map shifts PRECISELY to this month's isolated columns
                             updates_count = 0
                             for record in shift_records:
                                 target_day = record["DayNum"]
-                                end_col = min(month_start_col + num_days, len(day_num_row))
-                                matched_col_idx = None
+                                matched_col_idx = -1
                                 
                                 for col_idx in range(month_start_col, end_col):
-                                    if day_num_row[col_idx].strip() == target_day:
+                                    if col_idx < len(row2_days) and row2_days[col_idx].strip() == target_day:
                                         matched_col_idx = col_idx
                                         break
                                         
-                                if matched_col_idx is not None:
+                                if matched_col_idx != -1:
                                     target_row_data[matched_col_idx] = record["Shift"]
                                     updates_count += 1
 
-                            cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
-                            sheet.update(cell_range, [target_row_data])
+                            # 5. ISOLATED WRITE: Only update the exact slice for this month. 
+                            # This guarantees October's data (to the left) is completely untouched!
+                            slice_to_write = target_row_data[month_start_col:end_col]
+                            start_a1 = gspread.utils.rowcol_to_a1(emp_row_idx + 1, month_start_col + 1)
+                            
+                            sheet.update(start_a1, [slice_to_write])
                             st.success(f"Successfully updated {updates_count} shifts for {employee_name} in Master Sheet!")
                         except Exception as sheet_err:
                             st.error(f"Google Sheets sync error:\n{traceback.format_exc()}")
