@@ -172,13 +172,14 @@ else:
                                 sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
                                 
                                 data = sheet.get_all_values()
+                                target_month_header = f"{month_name} {year_str}"
                                 
-                                # AUTOMATIC STREAMLINED 2-ROW HEADER CREATION FOR BLANK SHEETS
+                                # Check if sheet is completely blank
                                 if len(data) < 2 or not data[0] or data[0][0] == "":
                                     month_int = datetime.strptime(month_name, '%B').month
                                     num_days = monthrange(int(year_str), month_int)[1]
                                     
-                                    row1 = ["", f"{month_name} {year_str}"] + [""] * (num_days - 1)
+                                    row1 = ["", target_month_header] + [""] * (num_days - 1)
                                     row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
                                     
                                     sheet.update("A1", [row1, row2])
@@ -222,9 +223,78 @@ else:
                                         ]
                                     }
                                     sheet.spreadsheet.batch_update(body)
-                                    
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized clean headers for {month_name} {year_str}.")
+                                    st.info(f"Initialized clean headers for {target_month_header}.")
+                                else:
+                                    # Check if this specific month already exists in Row 1
+                                    month_row = data[0]
+                                    month_exists = any(target_month_header.lower() in cell.lower() for cell in month_row)
+                                    
+                                    if not month_exists:
+                                        # Append side-by-side: find next available column start index
+                                        current_max_col = max(len(row) for row in data)
+                                        start_col_idx = current_max_col + 1 # 1-based index for gspread
+                                        
+                                        month_int = datetime.strptime(month_name, '%B').month
+                                        num_days = monthrange(int(year_str), month_int)[1]
+                                        
+                                        # Pad existing rows so they match the new width
+                                        padded_data = []
+                                        for row in data:
+                                            while len(row) < current_max_col + 1 + num_days:
+                                                row.append("")
+                                            padded_data.append(row)
+                                        
+                                        # Set new month headers in Row 1 & Day numbers in Row 2
+                                        start_col_letter = gspread.utils.rowcol_to_a1(1, start_col_idx)[0]
+                                        end_col_idx = start_col_idx + num_days - 1
+                                        end_col_letter = gspread.utils.rowcol_to_a1(1, end_col_idx)[0]
+                                        
+                                        sheet.update(f"{start_col_letter}1", [[target_month_header] + [""] * (num_days - 1)])
+                                        sheet.update(f"{start_col_letter}2", [[str(d) for d in range(1, num_days + 1)]])
+                                        
+                                        # Apply width (35px) and borders to the new month's columns
+                                        body = {
+                                            "requests": [
+                                                {
+                                                    "updateDimensionProperties": {
+                                                        "range": {
+                                                            "sheetId": sheet.id,
+                                                            "dimension": "COLUMNS",
+                                                            "startIndex": start_col_idx - 1,
+                                                            "endIndex": end_col_idx
+                                                        },
+                                                        "properties": {"pixelSize": 35},
+                                                        "fields": "pixelSize"
+                                                    }
+                                                },
+                                                {
+                                                    "repeatCell": {
+                                                        "range": {
+                                                            "sheetId": sheet.id,
+                                                            "startRowIndex": 0,
+                                                            "endRowIndex": 100,
+                                                            "startColumnIndex": start_col_idx - 1,
+                                                            "endColumnIndex": end_col_idx
+                                                        },
+                                                        "cell": {
+                                                            "userEnteredFormat": {
+                                                                "borders": {
+                                                                    "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                                    "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                                    "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                                    "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
+                                                                }
+                                                            }
+                                                        },
+                                                        "fields": "userEnteredFormat.borders"
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                        sheet.spreadsheet.batch_update(body)
+                                        data = sheet.get_all_values()
+                                        st.info(f"Appended new month columns for **{target_month_header}** side-by-side!")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
