@@ -126,7 +126,7 @@ def rebuild_sheet_grid(employees, months):
 def apply_full_schedule_formatting(spreadsheet, sheet, data):
     """
     Applies exact grid borders, compact cell widths, centered alignment,
-    and calendar-accurate weekend grey shading for all months present in row 1.
+    frozen pane rules (Column A & Rows 1-2), and calendar-accurate weekend grey shading.
     """
     if len(data) < 2:
         return
@@ -138,7 +138,21 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
     
     requests = []
 
-    # 1. Format Column A (Employee Name)
+    # 1. Freeze Column A (Employee Name) and Rows 1 & 2 (Headers)
+    requests.append({
+        "updateSheetProperties": {
+            "properties": {
+                "sheetId": sheet.id,
+                "gridProperties": {
+                    "frozenRowCount": 2,
+                    "frozenColumnCount": 1
+                }
+            },
+            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"
+        }
+    })
+
+    # 2. Format Column A (Employee Name)
     requests.append({
         "updateDimensionProperties": {
             "range": {
@@ -178,7 +192,7 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
         }
     })
 
-    # 2. Format each month block
+    # 3. Format each month block
     c = 1
     while c < total_cols:
         month_found = None
@@ -397,7 +411,13 @@ else:
                             
                             gc = gspread.service_account_from_dict(cred_dict)
                             spreadsheet = gc.open_by_url(GOOGLE_SHEET_URL)
-                            sheet = spreadsheet.sheet1
+                            
+                            # --- YEARLY TAB ROUTING ---
+                            year_tab_name = year_str  # e.g., "2026"
+                            try:
+                                sheet = spreadsheet.worksheet(year_tab_name)
+                            except Exception:
+                                sheet = spreadsheet.add_worksheet(title=year_tab_name, rows=100, cols=400)
                             
                             raw_data = sheet.get_all_values()
                             
@@ -439,14 +459,19 @@ else:
                             # 4. Rebuild full 2D grid matrix sorted strictly chronologically by (year, month)
                             new_grid = rebuild_sheet_grid(employees, months_dict)
                             
-                            # 5. Clear sheet & write chronologically sorted matrix
+                            # 5. Ensure worksheet has enough columns before updating
+                            required_cols = len(new_grid[0])
+                            if sheet.col_count < required_cols:
+                                sheet.add_cols(required_cols - sheet.col_count)
+                            
+                            # 6. Clear sheet & write chronologically sorted matrix
                             sheet.clear()
                             sheet.update("A1", new_grid)
                             
-                            # 6. Apply full formatting (Column widths, borders, alignment & calendar-accurate weekend grey shading)
+                            # 7. Apply full formatting (Frozen Column A & Rows 1-2, Column widths, borders, alignment & grey weekend shading)
                             apply_full_schedule_formatting(spreadsheet, sheet, new_grid)
 
-                            st.success(f"Successfully updated shifts for **{employee_name}** in Master Sheet and sorted schedule chronologically!")
+                            st.success(f"Successfully updated shifts for **{employee_name}** in Year **{year_tab_name}** tab!")
                         except Exception as sheet_err:
                             st.error(f"Google Sheets sync error:\n{traceback.format_exc()}")
                 else:
