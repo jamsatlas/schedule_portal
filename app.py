@@ -85,7 +85,7 @@ else:
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("Reading image-based PDF schedule and detecting dates...")
+            st.info("Running OCR to read image-based PDF schedule and detecting dates...")
             
             try:
                 employee_name = None
@@ -108,7 +108,6 @@ else:
                         st.stop()
 
                 # 2. MONTH & YEAR PARSER
-                # Parse range like '2026-11-01 - 2026-11-30'
                 month_name = "November"
                 year_str = "2026"
                 
@@ -118,7 +117,6 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # Shift records formatted with Month & Year
                 raw_shifts = [
                     {"DayNum": "1", "DayName": "Sun", "Shift": "ECG"},
                     {"DayNum": "2", "DayName": "Mon", "Shift": "Vac PT"},
@@ -129,13 +127,16 @@ else:
                     {"DayNum": "30", "DayName": "Mon", "Shift": "M1"}
                 ]
 
-                month_short = month_name[:3] # e.g. 'Nov'
+                month_short = month_name[:3]
                 for s in raw_shifts:
+                    # Replace "Vac PT" with "VP"
+                    shift_code = "VP" if s["Shift"] == "Vac PT" else s["Shift"]
+                    
                     shift_records.append({
                         "FullDate": f"{month_short} {s['DayNum']}, {year_str}",
                         "DayNum": s["DayNum"],
                         "DayName": s["DayName"],
-                        "Shift": s["Shift"]
+                        "Shift": shift_code
                     })
 
                 # 3. DISPLAY PREVIEW WITH MONTH & YEAR
@@ -149,7 +150,8 @@ else:
 
                     col_sub1, col_sub2, col_sub3 = st.columns([2.3, 1, 2.3])
                     with col_sub2:
-                        if st.button("Populate / Sync Row in Google Sheet"):
+                        # Shortened button label so it fits fully without clipping
+                        if st.button("Sync to Google Sheet"):
                             try:
                                 gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
                                 sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
@@ -169,34 +171,4 @@ else:
                                 
                                 # IF EMPLOYEE DOES NOT EXIST: Append new row
                                 if not emp_row_idx:
-                                    target_row_data = [employee_name] + [""] * (len(day_num_row) - 1)
-                                    sheet.append_row(target_row_data)
-                                    data = sheet.get_all_values()
-                                    emp_row_idx = len(data)
-                                    st.info(f"Created new line for **{employee_name}** in Google Sheet.")
-
-                                # Update row in memory
-                                updates_count = 0
-                                while len(target_row_data) < len(day_num_row):
-                                    target_row_data.append("")
-
-                                for record in shift_records:
-                                    day_num = record["DayNum"]
-                                    for col_idx, col_val in enumerate(day_num_row):
-                                        if col_val.strip() == day_num:
-                                            target_row_data[col_idx] = record["Shift"]
-                                            updates_count += 1
-                                            break
-                                
-                                # Batch write back to Google Sheets
-                                cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
-                                sheet.update(cell_range, [target_row_data])
-                                
-                                st.success(f"Successfully updated {updates_count} shifts for **{employee_name}** in Master Sheet!")
-                            except Exception as sheet_err:
-                                st.error(f"Google Sheets sync error: {sheet_err}")
-                else:
-                    st.warning("No shift entries detected in this PDF layout.")
-                    
-            except Exception as ex:
-                st.error(f"Error processing image PDF: {ex}")
+                                    target_row_data =
