@@ -224,7 +224,7 @@ else:
                                     sheet.spreadsheet.batch_update(body)
                                     
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized clean headers for **{month_name} {year_str}**.")
+                                    st.info(f"Initialized clean headers for {month_name} {year_str}.")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
@@ -243,7 +243,7 @@ else:
                                     sheet.append_row(target_row_data)
                                     data = sheet.get_all_values()
                                     emp_row_idx = len(data)
-                                    st.info(f"Created new line for **{employee_name}** in Google Sheet.")
+                                    st.info(f"Created new line for {employee_name} in Google Sheet.")
                                     target_row_data = list(data[emp_row_idx - 1])
 
                                 while len(target_row_data) < max_cols:
@@ -284,12 +284,12 @@ else:
                                 cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
                                 sheet.update(cell_range, [target_row_data])
                                 
-                                st.success(f"Successfully updated {updates_count} shifts for **{employee_name}** in Master Sheet!")
+                                st.success(f"Successfully updated {updates_count} shifts for {employee_name} in Master Sheet!")
                             except Exception as sheet_err:
                                 err_details = traceback.format_exc()
-                                st.error(f"Google Sheets sync error:\n```python\n{err_details}\n```")
+                                st.error(f"Google Sheets sync error:\n{err_details}")
                 else:
                     st.warning("No shift entries detected in this PDF layout.")
                     
             except Exception as ex:
-                st.error(f"Error processing image PDF: {
+                st.error(f"Error processing image PDF: {ex}")
