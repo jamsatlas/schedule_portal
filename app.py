@@ -123,20 +123,31 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. DYNAMIC SHIFT PARSING FROM OCR TEXT
-                # Scans the OCR text for day numbers paired with shift codes
-                shift_matches = re.findall(r'\b(0?[1-9]|[12]\d|3[01])\b\s+(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)?\s*([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?)', full_text)
-                
-                seen_days = set()
+                # 3. OPEN SHIFT PARSING (ACCEPTS ALL SHIFT NAMES, SKIPS STAT HOLIDAYS)
+                lines = full_text.split('\n')
                 month_short = month_name[:3]
-                
-                for day_str, raw_shift in shift_matches:
-                    day_num = str(int(day_str)) # Normalize '01' to '1'
-                    if day_num not in seen_days and len(raw_shift.strip()) > 0:
-                        # Filter out noise/weekdays if caught mistakenly
-                        if raw_shift.strip() not in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
+                seen_days = set()
+
+                for line in lines:
+                    line_clean = line.strip()
+                    
+                    # Exclude lines/days matching statutory holidays
+                    if any(holiday_word in line_clean.lower() for holiday_word in ["remembrance", "holiday", "stat", "flag", "family day", "victoria day", "canada day", "civic", "labour", "thanksgiving", "christmas", "boxing"]):
+                        continue
+                        
+                    # Match day number followed by any shift text
+                    match = re.search(r'\b(0?[1-9]|[12]\d|3[01])\b\s+(.*)', line_clean)
+                    if match:
+                        day_num = str(int(match.group(1)))
+                        shift_text = match.group(2).strip()
+                        
+                        # Remove weekday names if captured at the start of shift text
+                        shift_text = re.sub(r'^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s*', '', shift_text, flags=re.IGNORECASE)
+                        shift_text = shift_text.strip()
+                        
+                        if shift_text and not shift_text.isdigit() and day_num not in seen_days:
                             seen_days.add(day_num)
-                            shift_code = "VP" if "Vac" in raw_shift else raw_shift.strip()
+                            shift_code = "VP" if "Vac" in shift_text else shift_text
                             
                             shift_records.append({
                                 "FullDate": f"{month_short} {day_num}, {year_str}",
@@ -149,6 +160,7 @@ else:
                 
                 if shift_records:
                     df_extracted = pd.DataFrame(shift_records)[["FullDate", "Shift"]]
+                    df_extracted.columns = ["Date", "Shift"]
                     st.write(f"Extracted Shifts Preview ({month_name} {year_str}):")
                     st.dataframe(df_extracted, hide_index=True)
 
@@ -305,7 +317,7 @@ else:
                                             
                                         sheet.spreadsheet.batch_update({"requests": requests_list})
                                         data = sheet.get_all_values()
-                                        st.info(f"Appended new month columns for **{target_month_header}** side-by-side!")
+                                        st.info(f"Appended new month columns with accurate weekend shading for **{target_month_header}** side-by-side!")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
@@ -328,49 +340,3 @@ else:
                                     target_row_data = list(data[emp_row_idx - 1])
 
                                 while len(target_row_data) < max_cols:
-                                    target_row_data.append("")
-
-                                updates_count = 0
-                                current_active_month = month_name
-                                
-                                for record in shift_records:
-                                    target_day = record["DayNum"]
-                                    record_month_short = record["FullDate"].split()[0]
-                                    record_month_full = datetime.strptime(record_month_short, '%b').strftime('%B')
-                                    
-                                    matched_col_idx = None
-                                    active_month_tracker = current_active_month
-                                    
-                                    for col_idx in range(1, max_cols):
-                                        if col_idx < len(month_row) and month_row[col_idx].strip():
-                                            cell_val = month_row[col_idx].strip()
-                                            if any(m in cell_val for m in ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]):
-                                                active_month_tracker = cell_val
-                                        
-                                        if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
-                                            if record_month_full.lower() in active_month_tracker.lower():
-                                                matched_col_idx = col_idx
-                                                break
-                                    
-                                    if matched_col_idx is None:
-                                        for col_idx in range(1, max_cols):
-                                            if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
-                                                matched_col_idx = col_idx
-                                                break
-
-                                    if matched_col_idx is not None:
-                                        target_row_data[matched_col_idx] = record["Shift"]
-                                        updates_count += 1
-
-                                cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
-                                sheet.update(cell_range, [target_row_data])
-                                
-                                st.success(f"Successfully updated {updates_count} shifts for {employee_name} in Master Sheet!")
-                            except Exception as sheet_err:
-                                err_details = traceback.format_exc()
-                                st.error(f"Google Sheets sync error:\n{err_details}")
-                else:
-                    st.warning("No shift entries detected in this PDF layout.")
-                    
-            except Exception as ex:
-                st.error(f"Error processing image PDF: {ex}")
