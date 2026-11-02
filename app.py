@@ -99,12 +99,12 @@ else:
                         if extracted:
                             full_text += extracted + "\n"
                 
-                # 1. DYNAMIC NAME EXTRACTION
-                name_match = re.search(r'(?:Employee|Name|Schedule for|JR|SJ)\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
+                # 1. CLEAN DYNAMIC NAME EXTRACTION (Removes trailing month words like October)
+                name_match = re.search(r'(?:JR|SJ)\s*([A-Z][a-z]+\s+[A-Z][a-z]+)', full_text)
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
                 else:
-                    name_fallback = re.search(r'\n([A-Z][a-z]+\s+[A-Z][a-z]+)\s*\n', full_text)
+                    name_fallback = re.search(r'\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b', full_text)
                     extracted_candidate = name_fallback.group(1).strip() if name_fallback else "Subanki Jeyapalan"
                 
                 employee_name = st.text_input("Confirm or edit detected employee full name:", value=extracted_candidate)
@@ -119,7 +119,7 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. DIRECT TOKEN SHIFT PARSER (< 5 CHARACTERS FILTER)
+                # 3. ROBUST TOKEN-BASED SHIFT PARSER (< 5 CHARACTERS FILTER)
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
@@ -130,6 +130,7 @@ else:
                     l_str = line.strip()
                     l_lower = l_str.lower()
                     
+                    # Skip holidays, date ranges, and metadata
                     if any(term in l_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu", "my schedule", "laboratory", "technologist"]):
                         current_day = None
                         continue
@@ -138,14 +139,17 @@ else:
                     if l_str in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
                         continue
 
+                    # Check for standalone day numbers
                     if l_str.isdigit() and 1 <= int(l_str) <= 31:
                         current_day = str(int(l_str))
                         continue
 
+                    # Scan line for valid short shift codes (< 5 chars) associated with current day
                     if current_day and current_day not in seen_days:
                         tokens = l_str.split()
                         for token in tokens:
                             t_clean = token.strip("[](),.")
+                            # FILTER: Must be alphanumeric, strictly under 5 characters, not a digit or weekday/department label
                             if t_clean.isalnum() and len(t_clean) < 5 and not t_clean.isdigit():
                                 if t_clean.upper() not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB", "OC"]:
                                     s_code = "VP" if t_clean.lower() in ["vac", "vp"] else t_clean
