@@ -173,18 +173,16 @@ else:
                                 
                                 data = sheet.get_all_values()
                                 target_month_header = f"{month_name} {year_str}"
+                                month_int = datetime.strptime(month_name, '%B').month
+                                num_days = monthrange(int(year_str), month_int)[1]
                                 
                                 # Check if sheet is completely blank
                                 if len(data) < 2 or not data[0] or data[0][0] == "":
-                                    month_int = datetime.strptime(month_name, '%B').month
-                                    num_days = monthrange(int(year_str), month_int)[1]
-                                    
                                     row1 = ["", target_month_header] + [""] * (num_days - 1)
                                     row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
                                     
                                     sheet.update("A1", [row1, row2])
                                     
-                                    # Build formatting requests: 35px width, borders, and weekend gray background
                                     requests_list = [
                                         {
                                             "updateDimensionProperties": {
@@ -200,8 +198,9 @@ else:
                                         }
                                     ]
                                     
-                                    for d in range(1, num_days + 1):
-                                        col_idx = 1 + d  # Column index (0-based)
+                                    for i in range(num_days):
+                                        d = i + 1
+                                        col_idx = 1 + i  # Column index (0-based, starting at col B index 1)
                                         dt_obj = datetime(int(year_str), month_int, d)
                                         is_weekend = dt_obj.weekday() >= 5  # 5=Saturday, 6=Sunday
                                         
@@ -235,7 +234,7 @@ else:
                                         
                                     sheet.spreadsheet.batch_update({"requests": requests_list})
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized clean headers with weekend shading for {target_month_header}.")
+                                    st.info(f"Initialized clean headers with accurate weekend shading for {target_month_header}.")
                                 else:
                                     # Check if this specific month already exists in Row 1
                                     month_row = data[0]
@@ -245,9 +244,6 @@ else:
                                         # Append side-by-side: find next available column start index
                                         current_max_col = max(len(row) for row in data)
                                         start_col_idx = current_max_col + 1 # 1-based index
-                                        
-                                        month_int = datetime.strptime(month_name, '%B').month
-                                        num_days = monthrange(int(year_str), month_int)[1]
                                         
                                         padded_data = []
                                         for row in data:
@@ -312,7 +308,7 @@ else:
                                             
                                         sheet.spreadsheet.batch_update({"requests": requests_list})
                                         data = sheet.get_all_values()
-                                        st.info(f"Appended new month columns with weekend shading for **{target_month_header}** side-by-side!")
+                                        st.info(f"Appended new month columns with accurate weekend shading for **{target_month_header}** side-by-side!")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
