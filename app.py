@@ -92,7 +92,6 @@ else:
                 employee_name = None
                 shift_records = []
                 
-                # Extract text directly using pdfplumber across all pages
                 full_text = ""
                 with pdfplumber.open(uploaded_file) as pdf:
                     for page in pdf.pages:
@@ -121,58 +120,42 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. ROBUST FLEXIBLE MULTI-PAGE PARSER
+                # 3. SHIFT PARSER WITH < 5 CHARACTER/NUMBER LENGTH FILTER
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
-                valid_shift_codes = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "Vac"}
 
                 current_day = None
-                buffer_text = ""
 
                 for line in lines:
                     l_str = line.strip()
                     
-                    # Skip statutory holidays and time-off requests
+                    # Skip common metadata keywords
                     l_lower = l_str.lower()
-                    if any(term in l_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
-                        current_day = None
-                        buffer_text = ""
+                    if any(term in l_lower for term in ["time-off", "approved", "opseu", "laboratory", "technologist"]):
                         continue
 
-                    # Check if line contains a day number
+                    # Check if line is a day number
                     if l_str.isdigit() and 1 <= int(l_str) <= 31:
-                        if current_day and buffer_text:
-                            # Evaluate previous day buffer
-                            for token in buffer_text.split():
-                                t_clean = token.strip("[](),.")
-                                if t_clean in valid_shift_codes:
-                                    s_code = "VP" if t_clean in ["Vac", "VP"] else t_clean
-                                    if current_day not in seen_days:
-                                        seen_days.add(current_day)
-                                        shift_records.append({
-                                            "FullDate": f"{month_short} {current_day}, {year_str}",
-                                            "DayNum": current_day,
-                                            "Shift": s_code
-                                        })
-                                    break
                         current_day = str(int(l_str))
-                        buffer_text = ""
-                    elif current_day:
-                        buffer_text += " " + l_str
-                        # Check tokens live in buffer
-                        for token in buffer_text.split():
+                        continue
+
+                    # If we have an active day, look for short shift codes (< 5 letters/numbers)
+                    if current_day and current_day not in seen_days:
+                        tokens = l_str.split()
+                        for token in tokens:
                             t_clean = token.strip("[](),.")
-                            if t_clean in valid_shift_codes:
-                                s_code = "VP" if t_clean in ["Vac", "VP"] else t_clean
-                                if current_day not in seen_days:
+                            # FILTER: Must be alphanumeric, less than 5 characters, and not a day or weekday name
+                            if t_clean.isalnum() and len(t_clean) < 5 and not t_clean.isdigit():
+                                if t_clean.upper() not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB"]:
+                                    s_code = "VP" if t_clean.lower() in ["vac", "vp"] else t_clean
                                     seen_days.add(current_day)
                                     shift_records.append({
                                         "FullDate": f"{month_short} {current_day}, {year_str}",
                                         "DayNum": current_day,
                                         "Shift": s_code
                                     })
-                                break
+                                    break
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
                 st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
