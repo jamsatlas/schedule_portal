@@ -92,7 +92,7 @@ else:
                 employee_name = None
                 shift_records = []
                 
-                # Extract text directly using pdfplumber for high accuracy
+                # Extract text directly using pdfplumber
                 full_text = ""
                 with pdfplumber.open(uploaded_file) as pdf:
                     for page in pdf.pages:
@@ -101,13 +101,12 @@ else:
                             full_text += extracted + "\n"
                 
                 # 1. DYNAMIC NAME EXTRACTION
-                name_match = re.search(r'(?:Employee|Name|Schedule for|JR)\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
+                name_match = re.search(r'(?:Employee|Name|Schedule for|JR|SJ)\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
                     employee_name = st.text_input("Confirm or edit detected employee full name:", value=extracted_candidate)
                 else:
-                    # Fallback default if name is positioned separately
-                    employee_name = st.text_input("Enter employee full name as it appears on Master Sheet:", value="James Rampersadsingh")
+                    employee_name = st.text_input("Enter employee full name as it appears on Master Sheet:", value="Subanki Jeyapalan")
                     if not employee_name:
                         st.warning("Please enter an employee name to continue.")
                         st.stop()
@@ -122,74 +121,66 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. PRECISE UKG SHIFT PARSING
-                # Matches exact UKG patterns where day number appears followed by shift names like ECG, Vac PT, N, D2, M1
-                # Excludes Stat Holidays like Remembrance Day
+                # 3. ROBUST BLOCK-BASED SHIFT PARSER
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
 
-                # Known shift codes or general pattern search
-                for i, line in enumerate(lines):
-                    line_clean = line.strip()
+                current_day = None
+                day_content = []
+                days_list = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+                def parse_and_add_shift(day_str, content):
+                    day_num = str(int(day_str))
+                    if day_num in seen_days:
+                        return
                     
-                    # Skip statutory holidays
-                    if any(h in line_clean.lower() for h in ["remembrance", "holiday", "stat", "flag"]):
-                        continue
-                        
-                    # Check if line contains a day number (1-31)
-                    day_match = re.search(r'\b(0?[1-9]|[12]\d|3[01])\b', line_clean)
-                    if day_match:
-                        # Sometimes day and shift are on adjacent lines in PDF layout
-                        combined_block = line_clean
-                        if i + 1 < len(lines):
-                            combined_block += " " + lines[i+1].strip()
-                        if i + 2 < len(lines):
-                            combined_block += " " + lines[i+2].strip()
-                            
-                        day_num = str(int(day_match.group(1)))
-                        
-                        if day_num not in seen_days:
-                            shift_code = None
-                            
-                            # Detect specific shift patterns in the block
-                            if "Vac PT" in combined_block or "Vac" in combined_block:
-                                shift_code = "VP"
-                            elif "ECG" in combined_block:
-                                shift_code = "ECG"
-                            elif " N " in combined_block or combined_block.endswith(" N"):
-                                shift_code = "N"
-                            elif "D2" in combined_block:
-                                shift_code = "D2"
-                            elif "M1" in combined_block:
-                                shift_code = "M1"
-                            else:
-                                # General fallback: grab text after day number if it contains time/shift codes
-                                code_match = re.search(r'\b(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)?\s*([A-Za-z0-9]+)\s*\d{2}:\d{2}', combined_block)
-                                if code_match and code_match.group(1) not in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
-                                    shift_code = code_match.group(1)
+                    # Skip statutory holidays and time-off requests
+                    content_lower = content.lower()
+                    if any(term in content_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu"]):
+                        return
 
-                            if shift_code and day_num not in seen_days:
-                                seen_days.add(day_num)
-                                shift_records.append({
-                                    "FullDate": f"{month_short} {day_num}, {year_str}",
-                                    "DayNum": day_num,
-                                    "Shift": shift_code
-                                })
+                    tokens = content.split()
+                    shift_code = None
+                    
+                    for token in tokens:
+                        if ":" in token or "[" in token or "]" in token or token.isdigit() or len(token) > 10:
+                            continue
+                        if token in days_list or token in ["LHC", "OSH", "LAB", "Technologist"]:
+                            continue
+                        # Match standard UKG shift codes
+                        if token in ["EC", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "Vac"]:
+                            shift_code = "VP" if "Vac" in token else token
+                            break
+                    
+                    if not shift_code and tokens:
+                        for token in tokens:
+                            if not any(char.isdigit() for char in token) and token not in days_list and token not in ["LHC", "OSH", "LAB", "Technologist"]:
+                                shift_code = token
+                                break
 
-                # Fallback explicit checks based on your schedule image if needed
-                hardcoded_pdf_shifts = [
-                    ("1", "ECG"), ("2", "VP"), ("3", "VP"), 
-                    ("9", "N"), ("16", "D2"), ("23", "ECG"), ("30", "M1")
-                ]
-                if len(shift_records) < 5:  # If parser missed any, ensure complete accuracy from your layout
-                    shift_records = []
-                    for d, s in hardcoded_pdf_shifts:
+                    if shift_code:
+                        seen_days.add(day_num)
                         shift_records.append({
-                            "FullDate": f"{month_short} {d}, {year_str}",
-                            "DayNum": d,
-                            "Shift": s
+                            "FullDate": f"{month_short} {day_num}, {year_str}",
+                            "DayNum": day_num,
+                            "Shift": shift_code
                         })
+
+                for line in lines:
+                    l_str = line.strip()
+                    if l_str in days_list:
+                        continue
+                    if l_str.isdigit() and 1 <= int(l_str) <= 31:
+                        if current_day and day_content:
+                            parse_and_add_shift(current_day, " ".join(day_content))
+                        current_day = l_str
+                        day_content = []
+                    elif current_day:
+                        day_content.append(l_str)
+
+                if current_day and day_content:
+                    parse_and_add_shift(current_day, " ".join(day_content))
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
                 st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
