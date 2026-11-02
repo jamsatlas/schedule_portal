@@ -5,7 +5,7 @@ import gspread
 import re
 import json
 import traceback
-from calendar import monthrange
+from calendar import monthrange, day_abbr
 from pdf2image import convert_from_bytes
 import pytesseract
 from datetime import datetime
@@ -102,8 +102,7 @@ else:
                 for img in images:
                     full_text += pytesseract.image_to_string(img) + "\n"
                 
-                # 1. DYNAMIC NAME EXTRACTION (Looks for common UKG name labels or allows manual entry)
-                # You can adjust this regex pattern depending on how UKG formats employee names in your PDFs
+                # 1. DYNAMIC NAME EXTRACTION
                 name_match = re.search(r'(?:Employee|Name|Schedule for)[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
@@ -174,27 +173,34 @@ else:
                                 
                                 data = sheet.get_all_values()
                                 
-                                # AUTOMATIC HEADER CREATION FOR BLANK OR MISSING HEADER SHEETS
-                                if len(data) < 2 or not data[0] or data[0][0] == "":
+                                # AUTOMATIC PROFESSIONAL HEADER CREATION FOR BLANK SHEETS
+                                if len(data) < 3 or not data[0] or data[0][0] == "":
                                     month_int = datetime.strptime(month_name, '%B').month
                                     num_days = monthrange(int(year_str), month_int)[1]
                                     
-                                    row1 = [f"{month_name} {year_str}"] + [""] * num_days
-                                    row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
+                                    # Build multi-month / multi-tier layout matching reference image
+                                    row1 = ["LHO - Phleb. / CR", "", "", f"{month_name} {year_str}"] + [""] * (num_days - 1)
+                                    row2 = ["Start Date:", "Date", "as of"] + [str(d) for d in range(1, num_days + 1)]
                                     
-                                    sheet.update("A1", [row1, row2])
+                                    # Generate day initial letters (W, T, F, S, S, M...) for row 3
+                                    day_letters = [""] * 3
+                                    for d in range(1, num_days + 1):
+                                        dt_obj = datetime(int(year_str), month_int, d)
+                                        day_letters.append(dt_obj.strftime('%a')[0])  # First letter of day (M, T, W...)
+                                    
+                                    sheet.update("A1", [row1, row2, day_letters])
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized Google Sheet with headers for **{month_name} {year_str}**.")
+                                    st.info(f"Initialized professional master headers for **{month_name} {year_str}**.")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
                                 max_cols = max(len(month_row), len(day_num_row))
                                 
-                                # Find existing employee row index
+                                # Find existing employee row index (employee names start below header rows)
                                 emp_row_idx = None
                                 target_row_data = None
                                 for idx, row in enumerate(data):
-                                    if idx >= 1 and row and employee_name.lower() in row[0].lower():
+                                    if idx >= 3 and row and employee_name.lower() in row[0].lower():
                                         emp_row_idx = idx + 1
                                         target_row_data = list(row)
                                         break
@@ -224,7 +230,7 @@ else:
                                     matched_col_idx = None
                                     active_month_tracker = current_active_month
                                     
-                                    for col_idx in range(1, max_cols):
+                                    for col_idx in range(3, max_cols):
                                         if col_idx < len(month_row) and month_row[col_idx].strip():
                                             cell_val = month_row[col_idx].strip()
                                             if any(m in cell_val for m in ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]):
@@ -236,7 +242,7 @@ else:
                                                 break
                                     
                                     if matched_col_idx is None:
-                                        for col_idx in range(1, max_cols):
+                                        for col_idx in range(3, max_cols):
                                             if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
                                                 matched_col_idx = col_idx
                                                 break
