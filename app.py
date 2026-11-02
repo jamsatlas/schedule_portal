@@ -3,6 +3,7 @@ import pdfplumber
 import pandas as pd
 import gspread
 import re
+import json
 from pdf2image import convert_from_bytes
 import pytesseract
 from datetime import datetime
@@ -151,7 +152,8 @@ else:
                     with col_sub2:
                         if st.button("Sync to Google Sheet"):
                             try:
-                                gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+                                cred_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS_JSON"])
+                                gc = gspread.service_account_from_dict(cred_dict)
                                 sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
                                 
                                 data = sheet.get_all_values()
