@@ -88,7 +88,7 @@ else:
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("Running OCR to read image-based PDF schedule...")
+            st.info("Running OCR and matching valid schedule shift codes...")
             
             try:
                 employee_name = None
@@ -106,7 +106,7 @@ else:
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
                 else:
-                    extracted_candidate = "Employee Name"
+                    extracted_candidate = "Subanki Jeyapalan"
                 
                 employee_name = st.text_input("Confirm or edit detected employee full name:", value=extracted_candidate)
 
@@ -122,46 +122,38 @@ else:
 
                 month_short = month_name[:3]
 
-                # 3. OCR SHIFT SCANNER WITH LENGTH FILTER (< 5 CHARACTERS)
+                # 3. KNOWN-CODE MATCHING OCR PARSER (< 5 CHARACTERS)
+                # Official known shift codes to search for in the text blocks
+                known_shifts = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "VAC"}
+                
                 lines = full_text.split('\n')
                 seen_days = set()
                 current_day = None
 
-                skip_keywords = ["remembrance", "holiday", "stat", "time-off", "approved", "opseu", "my schedule", "laboratory", "technologist", "0714", "swap", "request"]
-
                 for line in lines:
                     l_str = line.strip()
-                    l_lower = l_str.lower()
+                    l_upper = l_str.upper()
                     
-                    if any(term in l_lower for term in skip_keywords):
-                        current_day = None
-                        continue
-                    if "-" in l_str and any(yr in l_str for yr in ["2024", "2025", "2026", "2027"]):
-                        continue
-                    if l_str in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
-                        continue
-
-                    # Check for day numbers
+                    # Check for day numbers (1-31)
                     if l_str.isdigit() and 1 <= int(l_str) <= 31:
                         current_day = str(int(l_str))
                         continue
 
-                    # Scan line for valid short shift codes (< 5 characters)
+                    # If we have an active day, check if any token matches our known shift codes
                     if current_day and current_day not in seen_days:
                         tokens = l_str.split()
                         for token in tokens:
-                            t_clean = token.strip("[](),.")
-                            if t_clean.isalnum() and len(t_clean) < 5 and not t_clean.isdigit():
-                                if t_clean.upper() not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB", "OC"]:
-                                    s_code = "VP" if t_clean.lower() in ["vac", "vp"] else t_clean.upper()
-                                    seen_days.add(current_day)
-                                    shift_records.append({
-                                        "FullDate": f"{month_short} {current_day}, {year_str}",
-                                        "DayNum": current_day,
-                                        "Shift": s_code
-                                    })
-                                    current_day = None
-                                    break
+                            t_clean = token.strip("[](),.").upper()
+                            if t_clean in known_shifts:
+                                s_code = "VP" if t_clean in ["VAC", "VP"] else t_clean
+                                seen_days.add(current_day)
+                                shift_records.append({
+                                    "FullDate": f"{month_short} {current_day}, {year_str}",
+                                    "DayNum": current_day,
+                                    "Shift": s_code
+                                })
+                                current_day = None
+                                break
 
                 # Sort chronologically by day
                 shift_records = sorted(shift_records, key=lambda x: int(x["DayNum"]))
