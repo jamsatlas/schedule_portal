@@ -228,4 +228,4 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
                         "borders": {
                             "top": {"style": "SOLID", "width": 1, "color": {"red": 0.7, "green": 0.7, "blue": 0.7}},
                             "bottom": {"style": "SOLID", "width": 1, "color": {"red": 0.7, "green": 0.7, "blue": 0.7}},
-                            "left": {"style": "SOLID", "width": 1, "color": {"red": 0.7, "green": 0.7,
+                            "left": {"style": "SOLID", "width": 1, "color": {"red": 0.7, "green": 0.7,}
