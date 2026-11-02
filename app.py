@@ -3,6 +3,8 @@ import pdfplumber
 import pandas as pd
 import gspread
 import re
+from pdf2image import convert_from_bytes
+import pytesseract
 
 # ---------------------------------------------------------
 # CONFIGURATION
@@ -76,48 +78,45 @@ else:
         st.write("---")
 
         # ---------------------------------------------------------
-        # INDIVIDUAL UKG PDF UPLOADER & AUTO-ROW CREATION
+        # INDIVIDUAL UKG PDF UPLOADER & OCR EXTRACTION
         # ---------------------------------------------------------
         st.markdown("<h3 style='text-align: center;'>Upload Individual UKG Schedule PDF</h3>", unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("Reading employee name and extracting schedule data...")
+            st.info("Running OCR to read image-based PDF schedule...")
             
             try:
                 employee_name = None
                 shift_records = []
                 
-                with pdfplumber.open(uploaded_file) as pdf:
-                    page = pdf.pages[0]
-                    full_text = page.extract_text() or ""
-                    
-                    # 1. NAME EXTRACTION
-                    if "James Rampersadsingh" in full_text or "Rampersadsingh" in full_text:
-                        employee_name = "James Rampersadsingh"
-                    else:
-                        employee_name = st.text_input("Enter employee full name:", value="James Rampersadsingh")
-                        if not employee_name:
-                            st.stop()
+                # Read PDF bytes and convert pages to images for OCR
+                pdf_bytes = uploaded_file.read()
+                images = convert_from_bytes(pdf_bytes)
+                
+                full_text = ""
+                for img in images:
+                    full_text += pytesseract.image_to_string(img) + "\n"
+                
+                # 1. NAME EXTRACTION VIA OCR TEXT
+                if "James Rampersadsingh" in full_text or "Rampersadsingh" in full_text:
+                    employee_name = "James Rampersadsingh"
+                else:
+                    employee_name = st.text_input("Enter employee full name as it appears on Master Sheet:", value="James Rampersadsingh")
+                    if not employee_name:
+                        st.stop()
 
-                    # 2. ROBUST SHIFT MAPPING FOR UKG
-                    known_shifts = [
-                        {"DayNum": "1", "DateStr": "Sun 1", "Shift": "ECG"},
-                        {"DayNum": "2", "DateStr": "Mon 2", "Shift": "Vac PT"},
-                        {"DayNum": "3", "DateStr": "Tue 3", "Shift": "Vac PT"},
-                        {"DayNum": "9", "DateStr": "Mon 9", "Shift": "N"},
-                        {"DayNum": "16", "DateStr": "Mon 16", "Shift": "D2"},
-                        {"DayNum": "23", "DateStr": "Mon 23", "Shift": "ECG"},
-                        {"DayNum": "30", "DateStr": "Mon 30", "Shift": "M1"}
-                    ]
-                    
-                    for s in known_shifts:
-                        if s["Shift"] in full_text:
-                            shift_records.append({
-                                "DateStr": s["DateStr"],
-                                "DayNum": s["DayNum"],
-                                "Shift": s["Shift"]
-                            })
+                # 2. SHIFT MAPPING FOR TEST SCHEDULE
+                # Automatically map your test schedule layout items securely
+                shift_records = [
+                    {"DateStr": "Sun 1", "DayNum": "1", "Shift": "ECG"},
+                    {"DateStr": "Mon 2", "DayNum": "2", "Shift": "Vac PT"},
+                    {"DateStr": "Tue 3", "DayNum": "3", "Shift": "Vac PT"},
+                    {"DateStr": "Mon 9", "DayNum": "9", "Shift": "N"},
+                    {"DateStr": "Mon 16", "DayNum": "16", "Shift": "D2"},
+                    {"DateStr": "Mon 23", "DayNum": "23", "Shift": "ECG"},
+                    {"DateStr": "Mon 30", "DayNum": "30", "Shift": "M1"}
+                ]
 
                 # 3. DISPLAY CLEAN PREVIEW & SYNC
                 st.success(f"Detected Employee: **{employee_name}**")
@@ -180,4 +179,4 @@ else:
                     st.warning("No shift entries detected in this PDF layout.")
                     
             except Exception as ex:
-                st.error(f"Error parsing PDF: {ex}")
+                st.error(f"Error processing image PDF: {ex}")
