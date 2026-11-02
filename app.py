@@ -88,7 +88,7 @@ else:
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("Running OCR to read image-based PDF schedule and detecting dates...")
+            st.info("Running OCR to read image-based PDF schedule and detecting info...")
             
             try:
                 employee_name = None
@@ -102,12 +102,16 @@ else:
                 for img in images:
                     full_text += pytesseract.image_to_string(img) + "\n"
                 
-                # 1. NAME EXTRACTION
-                if "James Rampersadsingh" in full_text or "Rampersadsingh" in full_text:
-                    employee_name = "James Rampersadsingh"
+                # 1. DYNAMIC NAME EXTRACTION (Looks for common UKG name labels or allows manual entry)
+                # You can adjust this regex pattern depending on how UKG formats employee names in your PDFs
+                name_match = re.search(r'(?:Employee|Name|Schedule for)[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
+                if name_match:
+                    extracted_candidate = name_match.group(1).strip()
+                    employee_name = st.text_input("Confirm or edit detected employee full name:", value=extracted_candidate)
                 else:
-                    employee_name = st.text_input("Enter employee full name as it appears on Master Sheet:", value="James Rampersadsingh")
+                    employee_name = st.text_input("Enter employee full name as it appears on Master Sheet:")
                     if not employee_name:
+                        st.warning("Please enter an employee name to continue.")
                         st.stop()
 
                 # 2. MONTH & YEAR PARSER
@@ -170,24 +174,32 @@ else:
                                 
                                 data = sheet.get_all_values()
                                 
-                                if len(data) < 2:
-                                    st.error("Master Sheet header structure is missing. Please ensure your month and day rows are set up.")
-                                    st.stop()
+                                # AUTOMATIC HEADER CREATION FOR BLANK OR MISSING HEADER SHEETS
+                                if len(data) < 2 or not data[0] or data[0][0] == "":
+                                    month_int = datetime.strptime(month_name, '%B').month
+                                    num_days = monthrange(int(year_str), month_int)[1]
+                                    
+                                    row1 = [f"{month_name} {year_str}"] + [""] * num_days
+                                    row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
+                                    
+                                    sheet.update("A1", [row1, row2])
+                                    data = sheet.get_all_values()
+                                    st.info(f"Initialized Google Sheet with headers for **{month_name} {year_str}**.")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
+                                max_cols = max(len(month_row), len(day_num_row))
                                 
                                 # Find existing employee row index
                                 emp_row_idx = None
                                 target_row_data = None
                                 for idx, row in enumerate(data):
-                                    if row and employee_name.lower() in row[0].lower():
+                                    if idx >= 1 and row and employee_name.lower() in row[0].lower():
                                         emp_row_idx = idx + 1
                                         target_row_data = list(row)
                                         break
                                 
                                 # IF EMPLOYEE DOES NOT EXIST: Append new row matching total columns
-                                max_cols = max(len(month_row), len(day_num_row))
                                 if not emp_row_idx:
                                     target_row_data = [employee_name] + [""] * (max_cols - 1)
                                     sheet.append_row(target_row_data)
