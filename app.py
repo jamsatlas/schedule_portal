@@ -108,7 +108,7 @@ else:
 
                 valid_shifts = {"EC", "ECG", "DCB1", "DCB2", "DHD", "DF", "N", "NC", "M1", "D1", "D2", "VP", "VAC"}
 
-                # 3. Universal Column-Aligned Pairing Parser
+                # 3. Universal Relaxed Proximity Parser (Works for any employee without coordinate restrictions)
                 shift_records = []
                 seen_days = set()
 
@@ -117,7 +117,7 @@ else:
                 for el in extracted_elements:
                     t = el["text"]
                     if t.isdigit() and 1 <= int(t) <= 31:
-                        if el["y"] > 100:
+                        if el["y"] > 90:
                             days.append(el)
                     elif t.upper() in valid_shifts:
                         shifts.append(el)
@@ -127,20 +127,20 @@ else:
                     if day_num in seen_days:
                         continue
                     
-                    dx = d["x"]
                     dy = d["y"]
+                    dx = d["x"]
                     
                     matching = []
                     for s in shifts:
-                        sx = s["x"]
                         sy = s["y"]
-                        if 0 <= (sy - dy) <= 65:
-                            if (dx < 100 and abs(sx - 138) < 30) or (dx > 500 and abs(sx - 643.5) < 30):
-                                matching.append((sy, s["text"].upper()))
+                        sx = s["x"]
+                        if 0 <= (sy - dy) <= 100:
+                            if abs(sx - dx) < 600:
+                                matching.append((abs(sy - dy), sy, s["text"].upper()))
                     
                     if matching:
                         matching.sort(key=lambda item: item[0])
-                        s_code = matching[0][1]
+                        s_code = matching[0][2]
                         seen_days.add(day_num)
                         shift_records.append({
                             "FullDate": f"{month_short} {day_num}, {year_str}",
