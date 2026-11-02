@@ -5,7 +5,7 @@ import gspread
 import re
 import json
 import traceback
-from calendar import monthrange, day_abbr
+from calendar import monthrange
 from pdf2image import convert_from_bytes
 import pytesseract
 from datetime import datetime
@@ -173,34 +173,51 @@ else:
                                 
                                 data = sheet.get_all_values()
                                 
-                                # AUTOMATIC PROFESSIONAL HEADER CREATION FOR BLANK SHEETS
-                                if len(data) < 3 or not data[0] or data[0][0] == "":
+                                # AUTOMATIC STREAMLINED 2-ROW HEADER CREATION FOR BLANK SHEETS
+                                if len(data) < 2 or not data[0] or data[0][0] == "":
                                     month_int = datetime.strptime(month_name, '%B').month
                                     num_days = monthrange(int(year_str), month_int)[1]
                                     
-                                    # Build multi-month / multi-tier layout matching reference image
-                                    row1 = ["LHO - Phleb. / CR", "", "", f"{month_name} {year_str}"] + [""] * (num_days - 1)
-                                    row2 = ["Start Date:", "Date", "as of"] + [str(d) for d in range(1, num_days + 1)]
+                                    # Row 1: Month/Year header starting in B1
+                                    row1 = ["LHO - Phleb. / CR", f"{month_name} {year_str}"] + [""] * (num_days - 1)
+                                    # Row 2: Employee Name in A2, Day numbers (1 to 31) starting in B2
+                                    row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
                                     
-                                    # Generate day initial letters (W, T, F, S, S, M...) for row 3
-                                    day_letters = [""] * 3
-                                    for d in range(1, num_days + 1):
+                                    sheet.update("A1", [row1, row2])
+                                    
+                                    # Format columns: narrow width, weekend shading (gray), and solid grid borders
+                                    border_style = {
+                                        "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                        "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                        "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                        "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
+                                    }
+                                    
+                                    for col_idx in range(2, 2 + num_days):
+                                        col_letter = gspread.utils.rowcol_to_a1(1, col_idx)[0]
+                                        sheet.format(f"{col_letter}1:{col_letter}100", {"borders": border_style})
+                                        sheet.format(f"{col_letter}1", {"pixelSize": 35})
+                                        
+                                        # Check if weekend (Saturday or Sunday) to shade background gray
+                                        d = col_idx - 1
                                         dt_obj = datetime(int(year_str), month_int, d)
-                                        day_letters.append(dt_obj.strftime('%a')[0])  # First letter of day (M, T, W...)
-                                    
-                                    sheet.update("A1", [row1, row2, day_letters])
+                                        if dt_obj.weekday() >= 5: # 5 = Saturday, 6 = Sunday
+                                            sheet.format(f"{col_letter}1:{col_letter}100", {
+                                                "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85}
+                                            })
+                                        
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized professional master headers for **{month_name} {year_str}**.")
+                                    st.info(f"Initialized 2-row clean calendar headers with weekend shading for **{month_name} {year_str}**.")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
                                 max_cols = max(len(month_row), len(day_num_row))
                                 
-                                # Find existing employee row index (employee names start below header rows)
+                                # Find existing employee row index
                                 emp_row_idx = None
                                 target_row_data = None
                                 for idx, row in enumerate(data):
-                                    if idx >= 3 and row and employee_name.lower() in row[0].lower():
+                                    if idx >= 2 and row and employee_name.lower() in row[0].lower():
                                         emp_row_idx = idx + 1
                                         target_row_data = list(row)
                                         break
@@ -230,7 +247,7 @@ else:
                                     matched_col_idx = None
                                     active_month_tracker = current_active_month
                                     
-                                    for col_idx in range(3, max_cols):
+                                    for col_idx in range(1, max_cols):
                                         if col_idx < len(month_row) and month_row[col_idx].strip():
                                             cell_val = month_row[col_idx].strip()
                                             if any(m in cell_val for m in ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]):
@@ -242,7 +259,7 @@ else:
                                                 break
                                     
                                     if matched_col_idx is None:
-                                        for col_idx in range(3, max_cols):
+                                        for col_idx in range(1, max_cols):
                                             if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
                                                 matched_col_idx = col_idx
                                                 break
