@@ -66,33 +66,25 @@ else:
             try:
                 reader = PdfReader(uploaded_file)
                 full_text = ""
-                extracted_elements = []
+                lines_list = []
                 for page in reader.pages:
-                    def visitor(text, cm, tm, fontDict, fontSize):
-                        if text.strip():
-                            extracted_elements.append({
-                                "text": text.strip(),
-                                "x": tm[4],
-                                "y": tm[5]
-                            })
-                    page.extract_text(visitor_text=visitor)
-                    ext = page.extract_text()
-                    if ext:
-                        full_text += ext + "\n"
+                    txt = page.extract_text()
+                    if txt:
+                        full_text += txt + "\n"
+                        for line in txt.split('\n'):
+                            if line.strip():
+                                lines_list.append(line.strip())
 
                 # 1. Dynamic Employee Name Extraction
                 name_match = re.search(r'(?:JR|SJ|AM|MK|JS|DB|Employee|Name|Schedule for)[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
                 else:
-                    lines = full_text.split('\n')
                     extracted_candidate = "Team Member"
-                    for line in lines:
-                        l_clean = line.strip()
-                        if len(l_clean.split()) >= 2 and not any(m in l_clean for m in ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "schedule"]):
-                            if any(initial in l_clean for initial in ["JR", "SJ", "AM", "MK", "JS", "DB"]):
-                                extracted_candidate = re.sub(r'^(?:JR|SJ|AM|MK|JS|DB)\s*', '', l_clean).strip()
-                                break
+                    for l in lines_list:
+                        if any(initial in l for initial in ["JR", "SJ", "AM", "MK", "JS", "DB"]) and len(l.split()) >= 2:
+                            extracted_candidate = re.sub(r'^(?:JR|SJ|AM|MK|JS|DB)\s*', '', l).strip()
+                            break
                 
                 employee_name = st.text_input("Confirm or edit detected employee full name:", value=extracted_candidate)
 
@@ -106,46 +98,38 @@ else:
                     month_name = datetime(2026, month_num, 1).strftime('%B')
                 month_short = month_name[:3]
 
-                # 3. Length-Filtered Proximity Shift Extraction
-                days_detected = []
-                for el in extracted_elements:
-                    t = el["text"]
-                    if t.isdigit() and 1 <= int(t) <= 31:
-                        if el["y"] > 90:
-                            days_detected.append(el)
-
-                sorted_elements = sorted(extracted_elements, key=lambda e: e["y"])
+                # 3. Robust Line-Block Shift & Holiday Filter Parser
                 shift_records = []
                 seen_days = set()
 
-                for d in sorted(days_detected, key=lambda d: d["y"]):
-                    day_num = int(d["text"])
-                    if day_num in seen_days:
-                        continue
-                    
-                    dy = d["y"]
-                    dx = d["x"]
-                    
-                    candidate_shifts = []
-                    for other in sorted_elements:
-                        sy = other["y"]
-                        sx = other["x"]
-                        if 0 < (sy - dy) <= 75 and abs(sx - dx) < 600:
-                            txt = other["text"].strip()
-                            # Filter: shift code must be no longer than 6 characters (accommodating short codes & Vac PT),
-                            # and must not be a time string or location noise.
-                            if len(txt) <= 6 and not re.match(r'^\d{2}:\d{2}', txt) and not any(noise in txt.lower() for noise in ["lhc", "osh", "lab", "technologist", "swap", "opseu", "remembrance", "0714", "0715"]):
-                                candidate_shifts.append((sy, txt))
+                i = 0
+                while i < len(lines_list):
+                    line = lines_list[i]
+                    if line.isdigit() and 1 <= int(line) <= 31:
+                        day_num = int(line)
+                        if day_num not in seen_days:
+                            block_text = " ".join(lines_list[i:i+6]).upper()
+                            
+                            # Skip holidays / STAT days
+                            if "STATDAY" in block_text or "REMEMBRANCE DAY" in block_text:
+                                seen_days.add(day_num)
+                                i += 1
+                                continue
 
-                    if candidate_shifts:
-                        candidate_shifts.sort(key=lambda item: item[0])
-                        s_code = candidate_shifts[0][1]
-                        seen_days.add(day_num)
-                        shift_records.append({
-                            "FullDate": f"{month_short} {day_num}, {year_str}",
-                            "DayNum": str(day_num),
-                            "Shift": "VP" if any(v in s_code.upper() for v in ["VAC", "VP"]) else s_code
-                        })
+                            for offset in range(1, 4):
+                                if i + offset < len(lines_list):
+                                    candidate = lines_list[i + offset].strip()
+                                    if (len(candidate) <= 10 and not re.search(r'\d{2}:\d{2}', candidate) and 
+                                        not any(noise in candidate.lower() for noise in ["lhc", "osh", "lab", "technologist", "swap", "opseu", "remembrance", "statday", "0714", "0715", "07143", "my schedule", "november", "october"])):
+                                        seen_days.add(day_num)
+                                        s_code = "VP" if any(v in candidate.upper() for v in ["VAC", "VP"]) else candidate
+                                        shift_records.append({
+                                            "FullDate": f"{month_short} {day_num}, {year_str}",
+                                            "DayNum": str(day_num),
+                                            "Shift": s_code
+                                        })
+                                        break
+                    i += 1
 
                 shift_records = sorted(shift_records, key=lambda x: int(x["DayNum"]))
 
@@ -154,7 +138,7 @@ else:
                 if shift_records:
                     df_extracted = pd.DataFrame(shift_records)[["FullDate", "Shift"]]
                     df_extracted.columns = ["Date", "Shift"]
-                    st.write(f"Extracted Shifts Preview ({month_name} {year_str}):")
+                    st.write(f"Extracted Shifts Preview ({month_name} {year_str}) — Holidays Excluded:")
                     st.dataframe(df_extracted, hide_index=True)
 
                     if st.button("Sync to Google Sheet"):
