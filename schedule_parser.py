@@ -26,11 +26,17 @@ import pdfplumber
 EXCLUDED_TITLES = ["STATDAY", "STAT DAY", "REMEMBRANCE"]
 
 # Code written to the sheet for an approved time-off request
-TIME_OFF_CODE = "TO"
+TIME_OFF_CODE = "V"
 
 # Exact renames applied to the printed shift code (UPPER-case keys)
 CODE_ALIASES = {
-    # "VAC PT": "VP",
+    "MI": "M1",
+    "M I": "M1",
+    "E N": "N",
+    "EN": "N",
+    "VAC PT": "V",
+    "VP": "V",
+    "TO": "V",
 }
 
 MONTHS = {m: i for i, m in enumerate(
@@ -192,11 +198,22 @@ def _looks_like_code(t):
 
 def _normalize_code(raw):
     code = raw.strip()
-    up = code.upper()
+    up = re.sub(r"\s+", " ", code.upper())
+    
     if up in CODE_ALIASES:
         return CODE_ALIASES[up]
-    if up.startswith("VAC") or up == "VP":
-        return "VP"
+        
+    # Handle "e N" / "E N" / "eN" OCR variations -> "N"
+    if re.fullmatch(r"E\s*N", up, re.I):
+        return "N"
+        
+    # Handle "Mi" / "M i" / "M1" OCR variations -> "M1"
+    if re.fullmatch(r"M\s*[I1i]", code, re.I):
+        return "M1"
+        
+    if up.startswith("VAC") or up in ("VP", "TO", "V"):
+        return "V"
+        
     return code
 
 
