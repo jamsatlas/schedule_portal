@@ -99,7 +99,7 @@ else:
                         if extracted:
                             full_text += extracted + "\n"
                 
-                # 1. CLEAN DYNAMIC NAME EXTRACTION (Removes trailing month words like October)
+                # 1. CLEAN DYNAMIC NAME EXTRACTION
                 name_match = re.search(r'(?:JR|SJ)\s*([A-Z][a-z]+\s+[A-Z][a-z]+)', full_text)
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
@@ -119,47 +119,51 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. ROBUST TOKEN-BASED SHIFT PARSER (< 5 CHARACTERS FILTER)
+                # 3. ADVANCED MULTI-COLUMN CALENDAR SHIFT PARSER
                 lines = full_text.split('\n')
                 month_short = month_name[:3]
                 seen_days = set()
-                
-                current_day = None
 
-                for line in lines:
+                days_list = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+                current_weekday = None
+                current_day_num = None
+
+                for i, line in enumerate(lines):
                     l_str = line.strip()
                     l_lower = l_str.lower()
-                    
-                    # Skip holidays, date ranges, and metadata
-                    if any(term in l_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu", "my schedule", "laboratory", "technologist"]):
-                        current_day = None
+
+                    # Skip major metadata or holiday headers
+                    if any(term in l_lower for term in ["remembrance", "holiday", "stat", "time-off", "approved", "opseu", "my schedule", "laboratory", "technologist", "0714"]):
                         continue
                     if "-" in l_str and any(yr in l_str for yr in ["2024", "2025", "2026", "2027"]):
                         continue
-                    if l_str in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
+
+                    # Check if line is a weekday name
+                    if l_str in days_list:
+                        current_weekday = l_str
                         continue
 
-                    # Check for standalone day numbers
+                    # Check if line is a day number (1-31)
                     if l_str.isdigit() and 1 <= int(l_str) <= 31:
-                        current_day = str(int(l_str))
+                        current_day_num = str(int(l_str))
                         continue
 
-                    # Scan line for valid short shift codes (< 5 chars) associated with current day
-                    if current_day and current_day not in seen_days:
+                    # If we recently captured a weekday and day number, look for the shift code on this line or nearby lines
+                    if current_day_num and current_day_num not in seen_days:
                         tokens = l_str.split()
                         for token in tokens:
                             t_clean = token.strip("[](),.")
-                            # FILTER: Must be alphanumeric, strictly under 5 characters, not a digit or weekday/department label
+                            # Strict length filter: must be alphanumeric, < 5 chars, not digits, not day names or departments
                             if t_clean.isalnum() and len(t_clean) < 5 and not t_clean.isdigit():
-                                if t_clean.upper() not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB", "OC"]:
+                                if t_clean.upper() not in days_list and t_clean.upper() not in ["LHC", "OSH", "LAB", "OC"]:
                                     s_code = "VP" if t_clean.lower() in ["vac", "vp"] else t_clean
-                                    seen_days.add(current_day)
+                                    seen_days.add(current_day_num)
                                     shift_records.append({
-                                        "FullDate": f"{month_short} {current_day}, {year_str}",
-                                        "DayNum": current_day,
+                                        "FullDate": f"{month_short} {current_day_num}, {year_str}",
+                                        "DayNum": current_day_num,
                                         "Shift": s_code
                                     })
-                                    current_day = None
+                                    current_day_num = None
                                     break
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
