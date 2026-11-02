@@ -153,6 +153,10 @@ else:
                         if st.button("Sync to Google Sheet"):
                             try:
                                 cred_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS_JSON"])
+                                
+                                if "private_key" in cred_dict:
+                                    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+
                                 gc = gspread.service_account_from_dict(cred_dict)
                                 sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
                                 
