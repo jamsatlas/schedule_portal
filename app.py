@@ -129,4 +129,95 @@ else:
                 seen_days = set()
 
                 for line in lines:
-                    line_clean = line
+                    line_clean = line.strip()
+                    
+                    # Exclude lines/days matching statutory holidays
+                    if any(holiday_word in line_clean.lower() for holiday_word in ["remembrance", "holiday", "stat", "flag", "family day", "victoria day", "canada day", "civic", "labour", "thanksgiving", "christmas", "boxing"]):
+                        continue
+                        
+                    # Match day number followed by any shift text
+                    match = re.search(r'\b(0?[1-9]|[12]\d|3[01])\b\s+(.*)', line_clean)
+                    if match:
+                        day_num = str(int(match.group(1)))
+                        shift_text = match.group(2).strip()
+                        
+                        # Remove weekday names if captured at the start of shift text
+                        shift_text = re.sub(r'^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s*', '', shift_text, flags=re.IGNORECASE)
+                        shift_text = shift_text.strip()
+                        
+                        if shift_text and not shift_text.isdigit() and day_num not in seen_days:
+                            seen_days.add(day_num)
+                            shift_code = "VP" if "Vac" in shift_text else shift_text
+                            
+                            shift_records.append({
+                                "FullDate": f"{month_short} {day_num}, {year_str}",
+                                "DayNum": day_num,
+                                "Shift": shift_code
+                            })
+
+                # 4. DISPLAY PREVIEW WITH MONTH & YEAR
+                st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
+                
+                if shift_records:
+                    df_extracted = pd.DataFrame(shift_records)[["FullDate", "Shift"]]
+                    df_extracted.columns = ["Date", "Shift"]
+                    st.write(f"Extracted Shifts Preview ({month_name} {year_str}):")
+                    st.dataframe(df_extracted, hide_index=True)
+
+                    col_sub1, col_sub2, col_sub3 = st.columns([2.3, 1, 2.3])
+                    with col_sub2:
+                        if st.button("Sync to Google Sheet"):
+                            try:
+                                raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+                                if isinstance(raw_secret, str):
+                                    cred_dict = json.loads(raw_secret)
+                                else:
+                                    cred_dict = dict(raw_secret)
+                                
+                                if "private_key" in cred_dict:
+                                    pk = cred_dict["private_key"]
+                                    pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
+                                    cred_dict["private_key"] = pk
+
+                                gc = gspread.service_account_from_dict(cred_dict)
+                                sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
+                                
+                                data = sheet.get_all_values()
+                                target_month_header = f"{month_name} {year_str}"
+                                month_int = datetime.strptime(month_name, '%B').month
+                                num_days = monthrange(int(year_str), month_int)[1]
+                                
+                                # Check if sheet is completely blank
+                                if len(data) < 2 or not data[0] or data[0][0] == "":
+                                    row1 = ["", target_month_header] + [""] * (num_days - 1)
+                                    row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
+                                    
+                                    sheet.update("A1", [row1, row2])
+                                    
+                                    requests_list = [
+                                        {
+                                            "updateDimensionProperties": {
+                                                "range": {
+                                                    "sheetId": sheet.id,
+                                                    "dimension": "COLUMNS",
+                                                    "startIndex": 1,
+                                                    "endIndex": 2 + num_days
+                                                },
+                                                "properties": {"pixelSize": 35},
+                                                "fields": "pixelSize"
+                                            }
+                                        }
+                                    ]
+                                    
+                                    for i in range(num_days):
+                                        d = i + 1
+                                        col_idx = 1 + i
+                                        dt_obj = datetime(int(year_str), month_int, d)
+                                        is_weekend = dt_obj.weekday() >= 5
+                                        
+                                        cell_format = {
+                                            "borders": {
+                                                "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                "right": {"style": "SOLID", "color": {"red": 0, "
