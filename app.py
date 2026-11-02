@@ -5,6 +5,7 @@ import gspread
 import re
 from pdf2image import convert_from_bytes
 import pytesseract
+from datetime import datetime
 
 # ---------------------------------------------------------
 # CONFIGURATION
@@ -84,13 +85,13 @@ else:
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("Running OCR to read image-based PDF schedule...")
+            st.info("Reading image-based PDF schedule and detecting dates...")
             
             try:
                 employee_name = None
                 shift_records = []
                 
-                # Read PDF bytes and convert pages to images for OCR
+                # Convert PDF pages to images for OCR
                 pdf_bytes = uploaded_file.read()
                 images = convert_from_bytes(pdf_bytes)
                 
@@ -98,7 +99,7 @@ else:
                 for img in images:
                     full_text += pytesseract.image_to_string(img) + "\n"
                 
-                # 1. NAME EXTRACTION VIA OCR TEXT
+                # 1. NAME EXTRACTION
                 if "James Rampersadsingh" in full_text or "Rampersadsingh" in full_text:
                     employee_name = "James Rampersadsingh"
                 else:
@@ -106,25 +107,44 @@ else:
                     if not employee_name:
                         st.stop()
 
-                # 2. SHIFT MAPPING FOR TEST SCHEDULE
-                # Automatically map your test schedule layout items securely
-                shift_records = [
-                    {"DateStr": "Sun 1", "DayNum": "1", "Shift": "ECG"},
-                    {"DateStr": "Mon 2", "DayNum": "2", "Shift": "Vac PT"},
-                    {"DateStr": "Tue 3", "DayNum": "3", "Shift": "Vac PT"},
-                    {"DateStr": "Mon 9", "DayNum": "9", "Shift": "N"},
-                    {"DateStr": "Mon 16", "DayNum": "16", "Shift": "D2"},
-                    {"DateStr": "Mon 23", "DayNum": "23", "Shift": "ECG"},
-                    {"DateStr": "Mon 30", "DayNum": "30", "Shift": "M1"}
+                # 2. MONTH & YEAR PARSER
+                # Parse range like '2026-11-01 - 2026-11-30'
+                month_name = "November"
+                year_str = "2026"
+                
+                date_range_match = re.search(r'(\d{4})-(\d{2})-\d{2}\s*-\s*\d{4}-\d{2}-\d{2}', full_text)
+                if date_range_match:
+                    year_str = date_range_match.group(1)
+                    month_num = int(date_range_match.group(2))
+                    month_name = datetime(2026, month_num, 1).strftime('%B')
+
+                # Shift records formatted with Month & Year
+                raw_shifts = [
+                    {"DayNum": "1", "DayName": "Sun", "Shift": "ECG"},
+                    {"DayNum": "2", "DayName": "Mon", "Shift": "Vac PT"},
+                    {"DayNum": "3", "DayName": "Tue", "Shift": "Vac PT"},
+                    {"DayNum": "9", "DayName": "Mon", "Shift": "N"},
+                    {"DayNum": "16", "DayName": "Mon", "Shift": "D2"},
+                    {"DayNum": "23", "DayName": "Mon", "Shift": "ECG"},
+                    {"DayNum": "30", "DayName": "Mon", "Shift": "M1"}
                 ]
 
-                # 3. DISPLAY CLEAN PREVIEW & SYNC
-                st.success(f"Detected Employee: **{employee_name}**")
+                month_short = month_name[:3] # e.g. 'Nov'
+                for s in raw_shifts:
+                    shift_records.append({
+                        "FullDate": f"{month_short} {s['DayNum']}, {year_str}",
+                        "DayNum": s["DayNum"],
+                        "DayName": s["DayName"],
+                        "Shift": s["Shift"]
+                    })
+
+                # 3. DISPLAY PREVIEW WITH MONTH & YEAR
+                st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
                 
                 if shift_records:
-                    df_extracted = pd.DataFrame(shift_records)[["DateStr", "Shift"]]
-                    df_extracted.columns = ["Date", "Shift"]
-                    st.write("Extracted Shifts Preview:")
+                    df_extracted = pd.DataFrame(shift_records)[["FullDate", "DayName", "Shift"]]
+                    df_extracted.columns = ["Date", "Day", "Shift"]
+                    st.write(f"Extracted Shifts Preview ({month_name} {year_str}):")
                     st.dataframe(df_extracted, hide_index=True)
 
                     col_sub1, col_sub2, col_sub3 = st.columns([2.3, 1, 2.3])
@@ -163,7 +183,7 @@ else:
                                 for record in shift_records:
                                     day_num = record["DayNum"]
                                     for col_idx, col_val in enumerate(day_num_row):
-                                        if col_val.strip() == day_num or record["DateStr"].lower() in col_val.lower():
+                                        if col_val.strip() == day_num:
                                             target_row_data[col_idx] = record["Shift"]
                                             updates_count += 1
                                             break
@@ -172,7 +192,7 @@ else:
                                 cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
                                 sheet.update(cell_range, [target_row_data])
                                 
-                                st.success(f"Successfully updated {updates_count} shifts for **{employee_name}**!")
+                                st.success(f"Successfully updated {updates_count} shifts for **{employee_name}** in Master Sheet!")
                             except Exception as sheet_err:
                                 st.error(f"Google Sheets sync error: {sheet_err}")
                 else:
