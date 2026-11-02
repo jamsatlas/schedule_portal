@@ -125,7 +125,7 @@ def rebuild_sheet_grid(employees, months):
 
 def apply_full_schedule_formatting(spreadsheet, sheet, data):
     """
-    Applies exact grid borders, compact cell widths, centered alignment,
+    Applies grid borders, compact cell widths (38px), text centering,
     frozen pane rules (Column A & Rows 1-2), and calendar-accurate weekend grey shading.
     """
     if len(data) < 2:
@@ -367,114 +367,132 @@ else:
         st.success("Access Granted.")
         st.markdown(f"### [Click Here to Open Master Google Sheet]({GOOGLE_SHEET_URL})")
         st.write("---")
-        st.markdown("<h3 style='text-align: center;'>Upload Individual UKG Schedule PDF</h3>", unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
-        if uploaded_file is not None:
-            st.info("Reading PDF schedule layout and extracting shifts universally...")
-            try:
-                import schedule_parser
-                
-                pdf_bytes = uploaded_file.getvalue()
-                parsed_data = schedule_parser.parse_schedule(pdf_bytes)
-                
-                employee_name = st.text_input("Confirm or edit detected employee full name:", value=parsed_data.get("name", "Team Member"))
-                start_date = parsed_data.get("start")
-                
-                if not start_date:
-                    st.error("Could not find schedule date range in PDF.")
-                    st.stop()
+        st.markdown("<h3 style='text-align: center;'>Upload UKG Schedule PDFs</h3>", unsafe_allow_html=True)
+        
+        uploaded_files = st.file_uploader("Choose one or multiple individual schedule PDFs:", type=["pdf"], accept_multiple_files=True)
+        
+        if uploaded_files:
+            st.info(f"Processing {len(uploaded_files)} PDF schedule(s)...")
+            import schedule_parser
+            
+            parsed_batch = []
+            
+            for idx, file in enumerate(uploaded_files):
+                try:
+                    pdf_bytes = file.getvalue()
+                    parsed = schedule_parser.parse_schedule(pdf_bytes)
+                    emp_name = parsed.get("name", f"Employee {idx+1}")
+                    start_dt = parsed.get("start")
                     
-                month_name = start_date.strftime("%B")
-                year_str = str(start_date.year)
-                
-                shift_records = []
-                for s in parsed_data.get("shifts", []):
-                    shift_records.append({
-                        "FullDate": s["date"].strftime("%b %d, %Y"),
-                        "DayNum": str(s["date"].day),
-                        "Shift": s["code"]
+                    if not start_dt:
+                        st.warning(f"Could not find schedule date range in {file.name}. Skipping.")
+                        continue
+                        
+                    shift_recs = []
+                    for s in parsed.get("shifts", []):
+                        shift_recs.append({
+                            "FullDate": s["date"].strftime("%b %d, %Y"),
+                            "DayNum": str(s["date"].day),
+                            "Shift": s["code"]
+                        })
+                        
+                    parsed_batch.append({
+                        "filename": file.name,
+                        "employee_name": emp_name,
+                        "start_date": start_dt,
+                        "month_name": start_dt.strftime("%B"),
+                        "year_str": str(start_dt.year),
+                        "shift_records": shift_recs
                     })
-                
-                st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
-                if shift_records:
-                    df_extracted = pd.DataFrame(shift_records)[["FullDate", "Shift"]]
-                    df_extracted.columns = ["Date", "Shift"]
-                    st.write(f"Extracted Shifts Preview ({month_name} {year_str}) — Holidays Excluded:")
-                    st.dataframe(df_extracted, hide_index=True)
+                except Exception as parse_err:
+                    st.error(f"Error parsing {file.name}: {parse_err}")
 
-                    if st.button("Sync to Google Sheet"):
-                        try:
-                            raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
-                            cred_dict = json.loads(raw_secret) if isinstance(raw_secret, str) else dict(raw_secret)
-                            if "private_key" in cred_dict:
-                                cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+            if parsed_batch:
+                st.success(f"Successfully extracted {len(parsed_batch)} schedule(s)!")
+                
+                preview_rows = []
+                for item in parsed_batch:
+                    preview_rows.append({
+                        "File Name": item["filename"],
+                        "Employee Name": item["employee_name"],
+                        "Period": f"{item['month_name']} {item['year_str']}",
+                        "Shifts Count": len(item["shift_records"])
+                    })
+                st.write("### Extracted Schedules Overview:")
+                st.dataframe(pd.DataFrame(preview_rows), hide_index=True)
+
+                if st.button("Sync All to Google Sheet"):
+                    try:
+                        raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+                        cred_dict = json.loads(raw_secret) if isinstance(raw_secret, str) else dict(raw_secret)
+                        if "private_key" in cred_dict:
+                            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+                        
+                        gc = gspread.service_account_from_dict(cred_dict)
+                        spreadsheet = gc.open_by_url(GOOGLE_SHEET_URL)
+                        
+                        by_year = {}
+                        for item in parsed_batch:
+                            yr = item["year_str"]
+                            if yr not in by_year:
+                                by_year[yr] = []
+                            by_year[yr].append(item)
                             
-                            gc = gspread.service_account_from_dict(cred_dict)
-                            spreadsheet = gc.open_by_url(GOOGLE_SHEET_URL)
-                            
-                            # --- YEARLY TAB ROUTING ---
-                            year_tab_name = year_str  # e.g., "2026"
+                        for year_tab_name, items in by_year.items():
                             try:
                                 sheet = spreadsheet.worksheet(year_tab_name)
                             except Exception:
                                 sheet = spreadsheet.add_worksheet(title=year_tab_name, rows=100, cols=400)
                             
                             raw_data = sheet.get_all_values()
-                            
-                            # 1. Parse existing sheet matrix into structured memory
                             employees, months_dict = parse_existing_sheet(raw_data)
                             
-                            # 2. Ensure current employee is in employees list
-                            if employee_name not in employees:
-                                employees.append(employee_name)
+                            for item in items:
+                                emp_name = item["employee_name"]
+                                start_dt = item["start_date"]
+                                m_name = item["month_name"]
+                                y_str = item["year_str"]
+                                shift_recs = item["shift_records"]
                                 
-                            # 3. Add or update target month data
-                            current_year = start_date.year
-                            current_month = start_date.month
-                            month_key = (current_year, current_month)
-                            target_month_title = f"{month_name} {year_str}"
-                            num_days = monthrange(current_year, current_month)[1]
-                            
-                            if month_key not in months_dict:
-                                months_dict[month_key] = {
-                                    'title': target_month_title,
-                                    'num_days': num_days,
-                                    'employee_shifts': {}
-                                }
-                            
-                            shifts_array = months_dict[month_key]['employee_shifts'].get(employee_name, [""] * num_days)
-                            for rec in shift_records:
-                                d_idx = int(rec["DayNum"]) - 1
-                                if 0 <= d_idx < num_days:
-                                    shifts_array[d_idx] = rec["Shift"]
+                                if emp_name not in employees:
+                                    employees.append(emp_name)
                                     
-                            months_dict[month_key]['employee_shifts'][employee_name] = shifts_array
-                            
-                            # Ensure all employees have allocated arrays for all months
+                                current_year = start_dt.year
+                                current_month = start_dt.month
+                                month_key = (current_year, current_month)
+                                target_month_title = f"{m_name} {y_str}"
+                                num_days = monthrange(current_year, current_month)[1]
+                                
+                                if month_key not in months_dict:
+                                    months_dict[month_key] = {
+                                        'title': target_month_title,
+                                        'num_days': num_days,
+                                        'employee_shifts': {}
+                                    }
+                                
+                                shifts_array = months_dict[month_key]['employee_shifts'].get(emp_name, [""] * num_days)
+                                for rec in shift_recs:
+                                    d_idx = int(rec["DayNum"]) - 1
+                                    if 0 <= d_idx < num_days:
+                                        shifts_array[d_idx] = rec["Shift"]
+                                        
+                                months_dict[month_key]['employee_shifts'][emp_name] = shifts_array
+                                
                             for emp in employees:
                                 for mk in months_dict:
                                     if emp not in months_dict[mk]['employee_shifts']:
                                         months_dict[mk]['employee_shifts'][emp] = [""] * months_dict[mk]['num_days']
                                         
-                            # 4. Rebuild full 2D grid matrix sorted strictly chronologically by (year, month)
                             new_grid = rebuild_sheet_grid(employees, months_dict)
                             
-                            # 5. Ensure worksheet has enough columns before updating
                             required_cols = len(new_grid[0])
                             if sheet.col_count < required_cols:
                                 sheet.add_cols(required_cols - sheet.col_count)
                             
-                            # 6. Clear sheet & write chronologically sorted matrix
                             sheet.clear()
                             sheet.update("A1", new_grid)
-                            
-                            # 7. Apply full formatting (Frozen Column A & Rows 1-2, Column widths, borders, alignment & grey weekend shading)
                             apply_full_schedule_formatting(spreadsheet, sheet, new_grid)
 
-                            st.success(f"Successfully updated shifts for **{employee_name}** in Year **{year_tab_name}** tab!")
-                        except Exception as sheet_err:
-                            st.error(f"Google Sheets sync error:\n{traceback.format_exc()}")
-                else:
-                    st.warning("No shift entries detected in this PDF schedule.")
-            except Exception as ex:
-                st.error(f"Error processing PDF: {traceback.format_exc()}")
+                        st.success(f"Successfully synced all {len(parsed_batch)} schedule(s) to Master Sheet!")
+                    except Exception as sheet_err:
+                        st.error(f"Google Sheets sync error:\n{traceback.format_exc()}")
