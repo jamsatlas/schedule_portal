@@ -224,80 +224,9 @@ else:
                                             }
                                         ]
                                     }
-                                    gc.batch_update(sheet.spreadsheet.id, body)
+                                    sheet.spreadsheet.batch_update(body)
                                     
                                     data = sheet.get_all_values()
                                     st.info(f"Initialized clean headers for **{month_name} {year_str}**.")
 
-                                month_row = data[0] if len(data) > 0 else []
-                                day_num_row = data[1] if len(data) > 1 else []
-                                max_cols = max(len(month_row), len(day_num_row))
-                                
-                                # Find existing employee row index
-                                emp_row_idx = None
-                                target_row_data = None
-                                for idx, row in enumerate(data):
-                                    if idx >= 2 and row and employee_name.lower() in row[0].lower():
-                                        emp_row_idx = idx + 1
-                                        target_row_data = list(row)
-                                        break
-                                
-                                # IF EMPLOYEE DOES NOT EXIST: Append new row matching total columns
-                                if not emp_row_idx:
-                                    target_row_data = [employee_name] + [""] * (max_cols - 1)
-                                    sheet.append_row(target_row_data)
-                                    data = sheet.get_all_values()
-                                    emp_row_idx = len(data)
-                                    st.info(f"Created new line for **{employee_name}** in Google Sheet.")
-                                    target_row_data = list(data[emp_row_idx - 1])
-
-                                # Ensure row length matches header width
-                                while len(target_row_data) < max_cols:
-                                    target_row_data.append("")
-
-                                # Map shifts by matching both the Month header and Day Number across columns
-                                updates_count = 0
-                                current_active_month = month_name
-                                
-                                for record in shift_records:
-                                    target_day = record["DayNum"]
-                                    record_month_short = record["FullDate"].split()[0]
-                                    record_month_full = datetime.strptime(record_month_short, '%b').strftime('%B')
-                                    
-                                    matched_col_idx = None
-                                    active_month_tracker = current_active_month
-                                    
-                                    for col_idx in range(1, max_cols):
-                                        if col_idx < len(month_row) and month_row[col_idx].strip():
-                                            cell_val = month_row[col_idx].strip()
-                                            if any(m in cell_val for m in ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]):
-                                                active_month_tracker = cell_val
-                                        
-                                        if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
-                                            if record_month_full.lower() in active_month_tracker.lower():
-                                                matched_col_idx = col_idx
-                                                break
-                                    
-                                    if matched_col_idx is None:
-                                        for col_idx in range(1, max_cols):
-                                            if col_idx < len(day_num_row) and day_num_row[col_idx].strip() == target_day:
-                                                matched_col_idx = col_idx
-                                                break
-
-                                    if matched_col_idx is not None:
-                                        target_row_data[matched_col_idx] = record["Shift"]
-                                        updates_count += 1
-
-                                # Batch write back to Google Sheets
-                                cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
-                                sheet.update(cell_range, [target_row_data])
-                                
-                                st.success(f"Successfully updated {updates_count} shifts for **{employee_name}** in Master Sheet!")
-                            except Exception as sheet_err:
-                                err_details = traceback.format_exc()
-                                st.error(f"Google Sheets sync error:\n```python\n{err_details}\n```")
-                else:
-                    st.warning("No shift entries detected in this PDF layout.")
-                    
-            except Exception as ex:
-                st.error(f"Error processing image PDF: {ex}")
+                                month_row = data[0] if len(data) > 0
