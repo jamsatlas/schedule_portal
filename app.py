@@ -1,12 +1,12 @@
-import streamlit as st
-import pandas as pd
-import gspread
 import json
 import traceback
 from calendar import monthrange
-from datetime import datetime
-from pypdf import PdfReader
-import re
+
+import gspread
+import pandas as pd
+import streamlit as st
+
+from schedule_parser import parse_schedule
 
 VALID_USERS = {
     "admin26": "@ellica987",
@@ -21,6 +21,12 @@ if "code_unlocked" not in st.session_state:
     st.session_state["code_unlocked"] = False
 
 st.set_page_config(page_title="Team Schedule Portal", layout="centered")
+
+
+@st.cache_data(show_spinner="Reading schedule (OCR can take a few seconds)...")
+def cached_parse(pdf_bytes: bytes):
+    return parse_schedule(pdf_bytes)
+
 
 if not st.session_state["authenticated"]:
     st.markdown("<h1 style='text-align: center;'>Team Schedule Portal</h1>", unsafe_allow_html=True)
@@ -61,103 +67,68 @@ else:
         st.write("---")
         st.markdown("<h3 style='text-align: center;'>Upload Individual UKG Schedule PDF</h3>", unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
+
         if uploaded_file is not None:
-            st.info("Reading PDF schedule layout and extracting shifts universally...")
             try:
-                reader = PdfReader(uploaded_file)
-                full_text = ""
-                lines_list = []
-                for page in reader.pages:
-                    txt = page.extract_text()
-                    if txt:
-                        full_text += txt + "\n"
-                        for line in txt.split('\n'):
-                            if line.strip():
-                                lines_list.append(line.strip())
+                result = cached_parse(uploaded_file.getvalue())
+                shifts = result["shifts"]
+                period_start = result["start"]
+                month_name = period_start.strftime("%B")
+                year_str = str(period_start.year)
 
-                # 1. Dynamic Employee Name Extraction
-                name_match = re.search(r'(?:JR|SJ|AM|MK|JS|DB|Employee|Name|Schedule for)[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
-                if name_match:
-                    extracted_candidate = name_match.group(1).strip()
-                else:
-                    extracted_candidate = "Team Member"
-                    for l in lines_list:
-                        if any(initial in l for initial in ["JR", "SJ", "AM", "MK", "JS", "DB"]) and len(l.split()) >= 2:
-                            extracted_candidate = re.sub(r'^(?:JR|SJ|AM|MK|JS|DB)\s*', '', l).strip()
-                            break
-                
-                employee_name = st.text_input("Confirm or edit detected employee full name:", value=extracted_candidate)
+                employee_name = st.text_input(
+                    "Confirm or edit detected employee full name:",
+                    value=result["name"] or "Team Member",
+                )
+                st.success(
+                    f"Detected Employee: **{employee_name}** | "
+                    f"Schedule Period: **{month_name} {year_str}** | "
+                    f"Read via: **{result['method']}**"
+                )
 
-                # 2. Month & Year Parser
-                month_name = "November"
-                year_str = "2026"
-                date_range_match = re.search(r'(\d{4})-(\d{2})-\d{2}\s*-\s*\d{4}-\d{2}-\d{2}', full_text)
-                if date_range_match:
-                    year_str = date_range_match.group(1)
-                    month_num = int(date_range_match.group(2))
-                    month_name = datetime(2026, month_num, 1).strftime('%B')
-                month_short = month_name[:3]
+                if result["method"] == "OCR":
+                    st.caption("This PDF is an image, so it was read with OCR. "
+                               "Double-check the codes below and fix any mistakes before syncing.")
 
-                # 3. Robust Line-Block Shift & Holiday Filter Parser
-                shift_records = []
-                seen_days = set()
-
-                i = 0
-                while i < len(lines_list):
-                    line = lines_list[i]
-                    if line.isdigit() and 1 <= int(line) <= 31:
-                        day_num = int(line)
-                        if day_num not in seen_days:
-                            block_text = " ".join(lines_list[i:i+6]).upper()
-                            
-                            # Skip holidays / STAT days
-                            if "STATDAY" in block_text or "REMEMBRANCE DAY" in block_text:
-                                seen_days.add(day_num)
-                                i += 1
-                                continue
-
-                            for offset in range(1, 4):
-                                if i + offset < len(lines_list):
-                                    candidate = lines_list[i + offset].strip()
-                                    if (len(candidate) <= 10 and not re.search(r'\d{2}:\d{2}', candidate) and 
-                                        not any(noise in candidate.lower() for noise in ["lhc", "osh", "lab", "technologist", "swap", "opseu", "remembrance", "statday", "0714", "0715", "07143", "my schedule", "november", "october"])):
-                                        seen_days.add(day_num)
-                                        s_code = "VP" if any(v in candidate.upper() for v in ["VAC", "VP"]) else candidate
-                                        shift_records.append({
-                                            "FullDate": f"{month_short} {day_num}, {year_str}",
-                                            "DayNum": str(day_num),
-                                            "Shift": s_code
-                                        })
-                                        break
-                    i += 1
-
-                shift_records = sorted(shift_records, key=lambda x: int(x["DayNum"]))
-
-                # 4. Preview & Sync
-                st.success(f"Detected Employee: **{employee_name}** | Schedule Period: **{month_name} {year_str}**")
-                if shift_records:
-                    df_extracted = pd.DataFrame(shift_records)[["FullDate", "Shift"]]
-                    df_extracted.columns = ["Date", "Shift"]
-                    st.write(f"Extracted Shifts Preview ({month_name} {year_str}) — Holidays Excluded:")
-                    st.dataframe(df_extracted, hide_index=True)
+                if shifts:
+                    df = pd.DataFrame({
+                        "Date": [f'{s["date"].strftime("%b")} {s["date"].day}, {s["date"].year}' for s in shifts],
+                        "Shift": [s["code"] for s in shifts],
+                        "Time": [s["time"] for s in shifts],
+                    })
+                    st.write(f"Extracted Shifts ({month_name} {year_str}) — you can edit the Shift column:")
+                    edited = st.data_editor(
+                        df, hide_index=True, disabled=["Date", "Time"],
+                        num_rows="fixed", use_container_width=True,
+                    )
+                    if result["skipped"]:
+                        with st.expander("Holidays / entries excluded"):
+                            for s in result["skipped"]:
+                                st.write("• " + s)
 
                     if st.button("Sync to Google Sheet"):
                         try:
+                            # Final records come from the (possibly edited) table
+                            shift_records = [
+                                {"DayNum": str(shifts[i]["date"].day), "Shift": str(edited.iloc[i]["Shift"]).strip()}
+                                for i in range(len(shifts))
+                                if str(edited.iloc[i]["Shift"]).strip()
+                            ]
+
                             raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
                             cred_dict = json.loads(raw_secret) if isinstance(raw_secret, str) else dict(raw_secret)
                             if "private_key" in cred_dict:
-                                cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n").replace("\n", "\n")
+                                cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
                             gc = gspread.service_account_from_dict(cred_dict)
                             sheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
                             data = sheet.get_all_values()
                             target_month_header = f"{month_name} {year_str}"
-                            month_int = datetime.strptime(month_name, '%B').month
-                            num_days = monthrange(int(year_str), month_int)[1]
+                            num_days = monthrange(period_start.year, period_start.month)[1]
 
                             if len(data) < 2 or not data[0] or data[0][0] == "":
                                 row1 = ["", target_month_header] + [""] * (num_days - 1)
                                 row2 = ["Employee Name"] + [str(d) for d in range(1, num_days + 1)]
-                                sheet.update("A1", [row1, row2])
+                                sheet.update(range_name="A1", values=[row1, row2])
                                 data = sheet.get_all_values()
 
                             month_row = data[0] if len(data) > 0 else []
@@ -195,11 +166,11 @@ else:
                                     updates_count += 1
 
                             cell_range = f"A{emp_row_idx}:{gspread.utils.rowcol_to_a1(emp_row_idx, len(target_row_data))}"
-                            sheet.update(cell_range, [target_row_data])
+                            sheet.update(range_name=cell_range, values=[target_row_data])
                             st.success(f"Successfully updated {updates_count} shifts for {employee_name} in Master Sheet!")
-                        except Exception as sheet_err:
+                        except Exception:
                             st.error(f"Google Sheets sync error:\n{traceback.format_exc()}")
                 else:
                     st.warning("No shift entries detected in this PDF schedule.")
-            except Exception as ex:
+            except Exception:
                 st.error(f"Error processing PDF: {traceback.format_exc()}")
