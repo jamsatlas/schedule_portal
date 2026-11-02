@@ -6,6 +6,8 @@ import re
 import json
 import traceback
 from calendar import monthrange
+from pdf2image import convert_from_bytes
+import pytesseract
 from datetime import datetime
 
 # ---------------------------------------------------------
@@ -80,34 +82,31 @@ else:
         st.write("---")
 
         # ---------------------------------------------------------
-        # INDIVIDUAL UKG PDF UPLOADER & TEXT EXTRACTION
+        # INDIVIDUAL UKG PDF UPLOADER & OCR EXTRACTION
         # ---------------------------------------------------------
         st.markdown("<h3 style='text-align: center;'>Upload Individual UKG Schedule PDF</h3>", unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Choose your individual schedule PDF:", type=["pdf"])
 
         if uploaded_file is not None:
-            st.info("Reading PDF schedule layout and extracting shifts...")
+            st.info("Running OCR to read image-based PDF schedule...")
             
             try:
                 employee_name = None
                 shift_records = []
                 
-                full_text = ""
-                with pdfplumber.open(uploaded_file) as pdf:
-                    for page in pdf.pages:
-                        extracted = page.extract_text()
-                        if extracted:
-                            full_text += extracted + "\n"
+                pdf_bytes = uploaded_file.read()
+                images = convert_from_bytes(pdf_bytes)
                 
-                # 1. CLEAN DYNAMIC NAME EXTRACTION
-                name_match = re.search(r'(?:JR|SJ)\s*([A-Z][a-z]+\s+[A-Z][a-z]+)', full_text)
+                full_text = ""
+                for img in images:
+                    full_text += pytesseract.image_to_string(img) + "\n"
+                
+                # 1. DYNAMIC NAME EXTRACTION
+                name_match = re.search(r'(?:JR|SJ|Employee|Name|Schedule for)[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', full_text)
                 if name_match:
                     extracted_candidate = name_match.group(1).strip()
                 else:
-                    words = re.findall(r'\b([A-Z][a-z]+)\b', full_text)
-                    months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-                    filtered_words = [w for w in words if w not in months and w not in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Schedule", "Employee", "Name", "My"]]
-                    extracted_candidate = f"{filtered_words[0]} {filtered_words[1]}" if len(filtered_words) >= 2 else "Subanki Jeyapalan"
+                    extracted_candidate = "Employee Name"
                 
                 employee_name = st.text_input("Confirm or edit detected employee full name:", value=extracted_candidate)
 
@@ -121,45 +120,50 @@ else:
                     month_num = int(date_range_match.group(2))
                     month_name = datetime(2026, month_num, 1).strftime('%B')
 
-                # 3. STREAMLINED UNIFIED PATTERN SCANNER
-                lines = full_text.split('\n')
                 month_short = month_name[:3]
+
+                # 3. OCR SHIFT SCANNER WITH LENGTH FILTER (< 5 CHARACTERS)
+                lines = full_text.split('\n')
                 seen_days = set()
+                current_day = None
 
-                # Filter out lines containing noise, holidays, or metadata
-                noise_keywords = ["remembrance", "holiday", "stat", "time-off", "approved", "opseu", "my schedule", "laboratory", "technologist", "0714"]
-                filtered_lines = []
+                skip_keywords = ["remembrance", "holiday", "stat", "time-off", "approved", "opseu", "my schedule", "laboratory", "technologist", "0714", "swap", "request"]
+
                 for line in lines:
-                    l_lower = line.lower()
-                    if any(kw in l_lower for kw in noise_keywords):
+                    l_str = line.strip()
+                    l_lower = l_str.lower()
+                    
+                    if any(term in l_lower for term in skip_keywords):
+                        current_day = None
                         continue
-                    if "-" in line and any(yr in line for yr in ["2024", "2025", "2026", "2027"]):
+                    if "-" in l_str and any(yr in l_str for yr in ["2024", "2025", "2026", "2027"]):
                         continue
-                    filtered_lines.append(line)
+                    if l_str in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
+                        continue
 
-                cleaned_text = " ".join(filtered_lines)
+                    # Check for day numbers
+                    if l_str.isdigit() and 1 <= int(l_str) <= 31:
+                        current_day = str(int(l_str))
+                        continue
 
-                # Regex to find day numbers followed closely by a short shift code (< 5 chars)
-                pattern = r'\b(0?[1-9]|[12]\d|3[01])\b\s+(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)?\s*([A-Z0-9]{1,4})\b'
-                matches = re.finditer(pattern, cleaned_text, re.IGNORECASE)
+                    # Scan line for valid short shift codes (< 5 characters)
+                    if current_day and current_day not in seen_days:
+                        tokens = l_str.split()
+                        for token in tokens:
+                            t_clean = token.strip("[](),.")
+                            if t_clean.isalnum() and len(t_clean) < 5 and not t_clean.isdigit():
+                                if t_clean.upper() not in ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB", "OC"]:
+                                    s_code = "VP" if t_clean.lower() in ["vac", "vp"] else t_clean.upper()
+                                    seen_days.add(current_day)
+                                    shift_records.append({
+                                        "FullDate": f"{month_short} {current_day}, {year_str}",
+                                        "DayNum": current_day,
+                                        "Shift": s_code
+                                    })
+                                    current_day = None
+                                    break
 
-                excluded_tokens = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "LHC", "OSH", "LAB", "JR", "SJ", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP"}
-
-                for match in matches:
-                    day_str = str(int(match.group(1)))
-                    shift_code = match.group(2).upper()
-
-                    if shift_code not in excluded_tokens and not shift_code.isdigit():
-                        if day_str not in seen_days:
-                            seen_days.add(day_str)
-                            final_code = "VP" if shift_code in ["VAC", "VP"] else shift_code
-                            shift_records.append({
-                                "FullDate": f"{month_short} {day_str}, {year_str}",
-                                "DayNum": day_str,
-                                "Shift": final_code
-                            })
-
-                # Sort records chronologically by day number
+                # Sort chronologically by day
                 shift_records = sorted(shift_records, key=lambda x: int(x["DayNum"]))
 
                 # 4. DISPLAY PREVIEW WITH MONTH & YEAR
@@ -388,4 +392,4 @@ else:
                     st.warning("No shift entries detected in this PDF schedule.")
                     
             except Exception as ex:
-                st.error(f"Error processing PDF: {ex}")
+                st.error(f"Error processing image PDF: {ex}")
