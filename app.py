@@ -184,47 +184,58 @@ else:
                                     
                                     sheet.update("A1", [row1, row2])
                                     
-                                    body = {
-                                        "requests": [
-                                            {
-                                                "updateDimensionProperties": {
-                                                    "range": {
-                                                        "sheetId": sheet.id,
-                                                        "dimension": "COLUMNS",
-                                                        "startIndex": 1,
-                                                        "endIndex": 2 + num_days
-                                                    },
-                                                    "properties": {"pixelSize": 35},
-                                                    "fields": "pixelSize"
-                                                }
-                                            },
-                                            {
-                                                "repeatCell": {
-                                                    "range": {
-                                                        "sheetId": sheet.id,
-                                                        "startRowIndex": 0,
-                                                        "endRowIndex": 100,
-                                                        "startColumnIndex": 1,
-                                                        "endColumnIndex": 1 + num_days
-                                                    },
-                                                    "cell": {
-                                                        "userEnteredFormat": {
-                                                            "borders": {
-                                                                "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                                "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                                "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                                "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
-                                                            }
-                                                        }
-                                                    },
-                                                    "fields": "userEnteredFormat.borders"
-                                                }
+                                    # Build formatting requests: 35px width, borders, and weekend gray background
+                                    requests_list = [
+                                        {
+                                            "updateDimensionProperties": {
+                                                "range": {
+                                                    "sheetId": sheet.id,
+                                                    "dimension": "COLUMNS",
+                                                    "startIndex": 1,
+                                                    "endIndex": 2 + num_days
+                                                },
+                                                "properties": {"pixelSize": 35},
+                                                "fields": "pixelSize"
                                             }
-                                        ]
-                                    }
-                                    sheet.spreadsheet.batch_update(body)
+                                        }
+                                    ]
+                                    
+                                    for d in range(1, num_days + 1):
+                                        col_idx = 1 + d  # Column index (0-based)
+                                        dt_obj = datetime(int(year_str), month_int, d)
+                                        is_weekend = dt_obj.weekday() >= 5  # 5=Saturday, 6=Sunday
+                                        
+                                        cell_format = {
+                                            "borders": {
+                                                "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
+                                            }
+                                        }
+                                        fields_str = "userEnteredFormat.borders"
+                                        
+                                        if is_weekend:
+                                            cell_format["backgroundColor"] = {"red": 0.85, "green": 0.85, "blue": 0.85}
+                                            fields_str += ",userEnteredFormat.backgroundColor"
+                                            
+                                        requests_list.append({
+                                            "repeatCell": {
+                                                "range": {
+                                                    "sheetId": sheet.id,
+                                                    "startRowIndex": 0,
+                                                    "endRowIndex": 100,
+                                                    "startColumnIndex": col_idx,
+                                                    "endColumnIndex": col_idx + 1
+                                                },
+                                                "cell": {"userEnteredFormat": cell_format},
+                                                "fields": fields_str
+                                            }
+                                        })
+                                        
+                                    sheet.spreadsheet.batch_update({"requests": requests_list})
                                     data = sheet.get_all_values()
-                                    st.info(f"Initialized clean headers for {target_month_header}.")
+                                    st.info(f"Initialized clean headers with weekend shading for {target_month_header}.")
                                 else:
                                     # Check if this specific month already exists in Row 1
                                     month_row = data[0]
@@ -233,68 +244,75 @@ else:
                                     if not month_exists:
                                         # Append side-by-side: find next available column start index
                                         current_max_col = max(len(row) for row in data)
-                                        start_col_idx = current_max_col + 1 # 1-based index for gspread
+                                        start_col_idx = current_max_col + 1 # 1-based index
                                         
                                         month_int = datetime.strptime(month_name, '%B').month
                                         num_days = monthrange(int(year_str), month_int)[1]
                                         
-                                        # Pad existing rows so they match the new width
                                         padded_data = []
                                         for row in data:
                                             while len(row) < current_max_col + 1 + num_days:
                                                 row.append("")
                                             padded_data.append(row)
                                         
-                                        # Set new month headers in Row 1 & Day numbers in Row 2
                                         start_col_letter = gspread.utils.rowcol_to_a1(1, start_col_idx)[0]
                                         end_col_idx = start_col_idx + num_days - 1
-                                        end_col_letter = gspread.utils.rowcol_to_a1(1, end_col_idx)[0]
                                         
                                         sheet.update(f"{start_col_letter}1", [[target_month_header] + [""] * (num_days - 1)])
                                         sheet.update(f"{start_col_letter}2", [[str(d) for d in range(1, num_days + 1)]])
                                         
-                                        # Apply width (35px) and borders to the new month's columns
-                                        body = {
-                                            "requests": [
-                                                {
-                                                    "updateDimensionProperties": {
-                                                        "range": {
-                                                            "sheetId": sheet.id,
-                                                            "dimension": "COLUMNS",
-                                                            "startIndex": start_col_idx - 1,
-                                                            "endIndex": end_col_idx
-                                                        },
-                                                        "properties": {"pixelSize": 35},
-                                                        "fields": "pixelSize"
-                                                    }
-                                                },
-                                                {
-                                                    "repeatCell": {
-                                                        "range": {
-                                                            "sheetId": sheet.id,
-                                                            "startRowIndex": 0,
-                                                            "endRowIndex": 100,
-                                                            "startColumnIndex": start_col_idx - 1,
-                                                            "endColumnIndex": end_col_idx
-                                                        },
-                                                        "cell": {
-                                                            "userEnteredFormat": {
-                                                                "borders": {
-                                                                    "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                                    "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                                    "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
-                                                                    "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
-                                                                }
-                                                            }
-                                                        },
-                                                        "fields": "userEnteredFormat.borders"
-                                                    }
+                                        requests_list = [
+                                            {
+                                                "updateDimensionProperties": {
+                                                    "range": {
+                                                        "sheetId": sheet.id,
+                                                        "dimension": "COLUMNS",
+                                                        "startIndex": start_col_idx - 1,
+                                                        "endIndex": end_col_idx
+                                                    },
+                                                    "properties": {"pixelSize": 35},
+                                                    "fields": "pixelSize"
                                                 }
-                                            ]
-                                        }
-                                        sheet.spreadsheet.batch_update(body)
+                                            }
+                                        ]
+                                        
+                                        for i in range(num_days):
+                                            d = i + 1
+                                            col_idx = (start_col_idx - 1) + i
+                                            dt_obj = datetime(int(year_str), month_int, d)
+                                            is_weekend = dt_obj.weekday() >= 5
+                                            
+                                            cell_format = {
+                                                "borders": {
+                                                    "top": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                    "bottom": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                    "left": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}},
+                                                    "right": {"style": "SOLID", "color": {"red": 0, "green": 0, "blue": 0}}
+                                                }
+                                            }
+                                            fields_str = "userEnteredFormat.borders"
+                                            
+                                            if is_weekend:
+                                                cell_format["backgroundColor"] = {"red": 0.85, "green": 0.85, "blue": 0.85}
+                                                fields_str += ",userEnteredFormat.backgroundColor"
+                                                
+                                            requests_list.append({
+                                                "repeatCell": {
+                                                    "range": {
+                                                        "sheetId": sheet.id,
+                                                        "startRowIndex": 0,
+                                                        "endRowIndex": 100,
+                                                        "startColumnIndex": col_idx,
+                                                        "endColumnIndex": col_idx + 1
+                                                    },
+                                                    "cell": {"userEnteredFormat": cell_format},
+                                                    "fields": fields_str
+                                                }
+                                            })
+                                            
+                                        sheet.spreadsheet.batch_update({"requests": requests_list})
                                         data = sheet.get_all_values()
-                                        st.info(f"Appended new month columns for **{target_month_header}** side-by-side!")
+                                        st.info(f"Appended new month columns with weekend shading for **{target_month_header}** side-by-side!")
 
                                 month_row = data[0] if len(data) > 0 else []
                                 day_num_row = data[1] if len(data) > 1 else []
