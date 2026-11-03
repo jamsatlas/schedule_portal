@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import ast
 from datetime import datetime, time, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -49,19 +50,23 @@ def parse_shift_times(time_str):
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
 def get_calendar_service():
-    """Builds the Google Calendar API service using credentials stored in secrets."""
+    """Builds the Google Calendar API service safely handling JSON or Python dict formats."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
-    # Handle if Streamlit parses it as a dict or a string
     if isinstance(raw_secret, dict):
         cred_dict = raw_secret
     else:
         try:
+            # Try standard JSON first
             cred_dict = json.loads(raw_secret)
-        except json.JSONDecodeError:
-            # Automatically fix literal newlines introduced by TOML multiline strings
-            cleaned_secret = raw_secret.replace('\n', '\\n').replace('\r', '')
-            cred_dict = json.loads(cleaned_secret)
+        except Exception:
+            try:
+                # Fallback if single quotes or Python dict format was used
+                cred_dict = ast.literal_eval(raw_secret)
+            except Exception:
+                # Fallback to fix literal newlines in strings
+                cleaned_secret = raw_secret.replace('\n', '\\n').replace('\r', '')
+                cred_dict = json.loads(cleaned_secret)
             
     if "private_key" in cred_dict:
         cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
@@ -77,7 +82,7 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
     if not shift_records:
         return 0
 
-    # 1. Determine the date range of the uploaded schedule
+    # 1. Determine the date range of the uploaded schedule to handle trades/edits cleanly
     valid_dates = []
     for rec in shift_records:
         shift_code = str(rec["Shift Code"]).strip()
@@ -94,14 +99,13 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
     min_date = min(valid_dates)
     max_date = max(valid_dates)
     
-    # Format for Google Calendar API (RFC3339)
     time_min = datetime.combine(min_date, time.min).isoformat() + 'Z'
     time_max = datetime.combine(max_date + timedelta(days=1), time.max).isoformat() + 'Z'
 
     success_count = 0
     
     for cal_id in target_calendar_ids:
-        # 2. Find and delete existing work shift events in this date range to prevent duplicates
+        # 2. Sweep and delete existing work shift events in this date range to prevent duplicates
         try:
             events_result = service.events().list(
                 calendarId=cal_id,
@@ -114,13 +118,12 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
             existing_events = events_result.get('items', [])
             for event in existing_events:
                 summary = event.get('summary', '')
-                # Only delete events created by this app (starts with "Work Shift:")
                 if summary.startswith("Work Shift:"):
                     service.events().delete(calendarId=cal_id, eventId=event['id']).execute()
         except Exception as cleanup_err:
             print(f"Warning during cleanup of old events: {cleanup_err}")
 
-        # 3. Insert the newly parsed/edited shifts
+        # 3. Insert the newly parsed or updated shifts
         for rec in shift_records:
             shift_code = str(rec["Shift Code"]).strip()
             if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
@@ -151,7 +154,6 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
             service.events().insert(calendarId=cal_id, body=event_body).execute()
             success_count += 1
 
-    # Since we loop through target_calendar_ids, return count for one calendar
     return len(valid_dates)
 
 
@@ -238,7 +240,7 @@ else:
                                 reconstructed_records, 
                                 [CALENDAR_ID_1, CALENDAR_ID_2]
                             )
-                            st.success(f"Successfully exported {count} shifts to both of your Google Calendars!")
+                            st.success(f"Successfully exported shifts! (Replaced old shifts in date range to prevent duplicates).")
                         except Exception as sync_err:
                             st.error(f"Google Calendar Sync Error: {sync_err}")
             
