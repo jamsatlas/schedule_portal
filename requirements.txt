@@ -1,7 +1,9 @@
 streamlit
 pandas
-gspread
 pypdf
 pdfplumber
 pdf2image
 pytesseract
+google-api-python-client
+google-auth
+gspread
