@@ -1,7 +1,7 @@
 streamlit
-pdfplumber
 pandas
 gspread
-pytesseract
+pypdf
+pdfplumber
 pdf2image
-Pillow
+pytesseract
