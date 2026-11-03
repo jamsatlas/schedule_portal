@@ -51,7 +51,18 @@ def parse_shift_times(time_str):
 def get_calendar_service():
     """Builds the Google Calendar API service using credentials stored in secrets."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
-    cred_dict = json.loads(raw_secret) if isinstance(raw_secret, str) else dict(raw_secret)
+    
+    # Handle if Streamlit parses it as a dict or a string
+    if isinstance(raw_secret, dict):
+        cred_dict = raw_secret
+    else:
+        try:
+            cred_dict = json.loads(raw_secret)
+        except json.JSONDecodeError:
+            # Automatically fix literal newlines introduced by TOML multiline strings
+            cleaned_secret = raw_secret.replace('\n', '\\n').replace('\r', '')
+            cred_dict = json.loads(cleaned_secret)
+            
     if "private_key" in cred_dict:
         cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
         
@@ -59,44 +70,89 @@ def get_calendar_service():
     return build('calendar', 'v3', credentials=creds)
 
 def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
-    """Pushes parsed shifts directly into configured Google Calendars."""
+    """Pushes parsed shifts directly into configured Google Calendars, 
+    clearing out old shift events in that date range first to prevent duplicates."""
     service = get_calendar_service()
-    success_count = 0
     
+    if not shift_records:
+        return 0
+
+    # 1. Determine the date range of the uploaded schedule
+    valid_dates = []
     for rec in shift_records:
         shift_code = str(rec["Shift Code"]).strip()
-        if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
-            continue
-            
-        date_obj = datetime.strptime(rec["Date"], "%b %d, %Y").date()
-        start_t, end_t = parse_shift_times(rec["Time Range"])
+        if shift_code and shift_code.upper() not in ["OFF", "VAC", "UNAVAIL"]:
+            try:
+                dt = datetime.strptime(rec["Date"], "%b %d, %Y").date()
+                valid_dates.append(dt)
+            except ValueError:
+                pass
+                
+    if not valid_dates:
+        return 0
         
-        start_datetime = datetime.combine(date_obj, start_t)
-        end_datetime = datetime.combine(date_obj, end_t)
-        
-        # Handle overnight shifts crossing midnight
-        if end_datetime <= start_datetime:
-            end_datetime += timedelta(days=1)
-            
-        event_body = {
-            'summary': f"Work Shift: {shift_code}",
-            'description': f"UKG Shift Code: {shift_code}",
-            'start': {
-                'dateTime': start_datetime.isoformat(),
-                'timeZone': 'America/Toronto',
-            },
-            'end': {
-                'dateTime': end_datetime.isoformat(),
-                'timeZone': 'America/Toronto',
-            },
-        }
+    min_date = min(valid_dates)
+    max_date = max(valid_dates)
+    
+    # Format for Google Calendar API (RFC3339)
+    time_min = datetime.combine(min_date, time.min).isoformat() + 'Z'
+    time_max = datetime.combine(max_date + timedelta(days=1), time.max).isoformat() + 'Z'
 
-        for cal_id in target_calendar_ids:
+    success_count = 0
+    
+    for cal_id in target_calendar_ids:
+        # 2. Find and delete existing work shift events in this date range to prevent duplicates
+        try:
+            events_result = service.events().list(
+                calendarId=cal_id,
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+            
+            existing_events = events_result.get('items', [])
+            for event in existing_events:
+                summary = event.get('summary', '')
+                # Only delete events created by this app (starts with "Work Shift:")
+                if summary.startswith("Work Shift:"):
+                    service.events().delete(calendarId=cal_id, eventId=event['id']).execute()
+        except Exception as cleanup_err:
+            print(f"Warning during cleanup of old events: {cleanup_err}")
+
+        # 3. Insert the newly parsed/edited shifts
+        for rec in shift_records:
+            shift_code = str(rec["Shift Code"]).strip()
+            if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
+                continue
+                
+            date_obj = datetime.strptime(rec["Date"], "%b %d, %Y").date()
+            start_t, end_t = parse_shift_times(rec["Time Range"])
+            
+            start_datetime = datetime.combine(date_obj, start_t)
+            end_datetime = datetime.combine(date_obj, end_t)
+            
+            if end_datetime <= start_datetime:
+                end_datetime += timedelta(days=1)
+                
+            event_body = {
+                'summary': f"Work Shift: {shift_code}",
+                'description': f"UKG Shift Code: {shift_code}",
+                'start': {
+                    'dateTime': start_datetime.isoformat(),
+                    'timeZone': 'America/Toronto',
+                },
+                'end': {
+                    'dateTime': end_datetime.isoformat(),
+                    'timeZone': 'America/Toronto',
+                },
+            }
+
             service.events().insert(calendarId=cal_id, body=event_body).execute()
-            
-        success_count += 1
+            success_count += 1
 
-    return success_count
+    # Since we loop through target_calendar_ids, return count for one calendar
+    return len(valid_dates)
 
 
 # ==========================================
