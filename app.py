@@ -309,11 +309,17 @@ def apply_full_schedule_formatting(spreadsheet, sheet, data):
 if not st.session_state["authenticated"]:
     st.markdown("<h1 style='text-align: center;'>Team Schedule Portal</h1>", unsafe_allow_html=True)
     st.markdown("<h3 style='text-align: center;'>Please Sign In</h3>", unsafe_allow_html=True)
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    col1, col2 = st.columns([6.8, 1])
-    with col2:
-        if st.button("Sign In"):
+    
+    # Wrap inputs and submit button inside a form so Enter key submits
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        
+        col1, col2 = st.columns([6.8, 1])
+        with col2:
+            submit_button = st.form_submit_button("Sign In")
+            
+        if submit_button:
             if username in VALID_USERS and VALID_USERS[username] == password:
                 st.session_state["authenticated"] = True
                 st.rerun()
