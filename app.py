@@ -50,7 +50,7 @@ def parse_shift_times(time_str):
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
 def get_calendar_service():
-    """Builds the Google Calendar API service safely handling credentials and private keys."""
+    """Builds the Google Calendar API service with robust private key sanitization."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
     if isinstance(raw_secret, dict):
@@ -67,8 +67,15 @@ def get_calendar_service():
             
     if "private_key" in cred_dict:
         pk = cred_dict["private_key"]
+        # Thoroughly clean any escaped or malformed newline sequences
         pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
-        cred_dict["private_key"] = pk
+        # Ensure header and footer have exact newline formatting
+        pk = pk.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+        pk = pk.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
+        # Clean up any accidental double newlines created during replacement
+        while "\n\n" in pk:
+            pk = pk.replace("\n\n", "\n")
+        cred_dict["private_key"] = pk.strip() + "\n"
         
     creds = Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
     return build('calendar', 'v3', credentials=creds)
