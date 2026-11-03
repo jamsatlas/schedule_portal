@@ -50,26 +50,25 @@ def parse_shift_times(time_str):
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
 def get_calendar_service():
-    """Builds the Google Calendar API service safely handling JSON or Python dict formats."""
+    """Builds the Google Calendar API service safely handling credentials and private keys."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
     if isinstance(raw_secret, dict):
         cred_dict = raw_secret
     else:
         try:
-            # Try standard JSON first
             cred_dict = json.loads(raw_secret)
         except Exception:
             try:
-                # Fallback if single quotes or Python dict format was used
                 cred_dict = ast.literal_eval(raw_secret)
             except Exception:
-                # Fallback to fix literal newlines in strings
                 cleaned_secret = raw_secret.replace('\n', '\\n').replace('\r', '')
                 cred_dict = json.loads(cleaned_secret)
             
     if "private_key" in cred_dict:
-        cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+        pk = cred_dict["private_key"]
+        pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
+        cred_dict["private_key"] = pk
         
     creds = Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
     return build('calendar', 'v3', credentials=creds)
@@ -82,7 +81,6 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
     if not shift_records:
         return 0
 
-    # 1. Determine the date range of the uploaded schedule to handle trades/edits cleanly
     valid_dates = []
     for rec in shift_records:
         shift_code = str(rec["Shift Code"]).strip()
@@ -105,7 +103,6 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
     success_count = 0
     
     for cal_id in target_calendar_ids:
-        # 2. Sweep and delete existing work shift events in this date range to prevent duplicates
         try:
             events_result = service.events().list(
                 calendarId=cal_id,
@@ -123,7 +120,6 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
         except Exception as cleanup_err:
             print(f"Warning during cleanup of old events: {cleanup_err}")
 
-        # 3. Insert the newly parsed or updated shifts
         for rec in shift_records:
             shift_code = str(rec["Shift Code"]).strip()
             if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
