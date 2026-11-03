@@ -74,7 +74,7 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
         start_datetime = datetime.combine(date_obj, start_t)
         end_datetime = datetime.combine(date_obj, end_t)
         
-        # Handle overnight shifts
+        # Handle overnight shifts crossing midnight
         if end_datetime <= start_datetime:
             end_datetime += timedelta(days=1)
             
