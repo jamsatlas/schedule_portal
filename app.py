@@ -33,7 +33,7 @@ if "current_user" not in st.session_state:
 
 def parse_shift_times(time_str):
     """Parses shift time ranges into datetime.time objects."""
-    if not time_str or "-" not in time_str:
+    if not time_str or not isinstance(time_str, str) or "-" not in time_str:
         return time(9, 0), time(17, 0)
     
     parts = time_str.split("-")
@@ -51,7 +51,7 @@ def parse_shift_times(time_str):
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
 def get_calendar_service():
-    """Builds the Google Calendar API service with bulletproof private key regeneration."""
+    """Builds the Google Calendar API service with robust private key sanitization."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
     if isinstance(raw_secret, dict):
@@ -68,28 +68,20 @@ def get_calendar_service():
             
     if "private_key" in cred_dict:
         pk = cred_dict["private_key"]
+        if isinstance(pk, str):
+            pk = pk.replace('\\\\n', '\n').replace('\\n', '\n').replace('\\r', '')
+            
+        pk = pk.strip(' \t\n\r"\'')
+        lines = [line.strip() for line in pk.split('\n') if line.strip()]
         
-        # Extract lines and filter out bad characters, extra dashes, or symbol 92 backslashes
-        lines = pk.split('\n')
-        clean_lines = []
-        in_key = False
+        clean_lines = ["-----BEGIN PRIVATE KEY-----"]
         for line in lines:
-            if 'BEGIN PRIVATE KEY' in line:
-                in_key = True
+            if "BEGIN PRIVATE KEY" in line or "END PRIVATE KEY" in line:
                 continue
-            if 'END PRIVATE KEY' in line:
-                in_key = False
-                continue
-            if in_key:
-                # Keep only valid base64 characters, stripping backslashes and spaces completely
-                cleaned = re.sub(r'[^A-Za-z0-9+/=]', '', line)
-                if cleaned:
-                    clean_lines.append(cleaned)
-                    
-        base64_data = ''.join(clean_lines)
-        # Rebuild pristine 64-character PEM format
-        formatted_body = '\n'.join(base64_data[i:i+64] for i in range(0, len(base64_data), 64))
-        cred_dict["private_key"] = f"-----BEGIN PRIVATE KEY-----\n{formatted_body}\n-----END PRIVATE KEY-----\n"
+            clean_lines.append(line)
+        clean_lines.append("-----END PRIVATE KEY-----")
+        
+        cred_dict["private_key"] = "\n".join(clean_lines) + "\n"
         
     creds = Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
     return build('calendar', 'v3', credentials=creds)
@@ -104,10 +96,17 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
 
     valid_dates = []
     for rec in shift_records:
-        shift_code = str(rec["Shift Code"]).strip()
+        date_val = rec.get("Date")
+        if not date_val or isinstance(date_val, float):
+            continue
+        date_str = str(date_val).strip()
+        if not date_str or date_str.lower() == 'nan':
+            continue
+
+        shift_code = str(rec.get("Shift Code", "")).strip()
         if shift_code and shift_code.upper() not in ["OFF", "VAC", "UNAVAIL"]:
             try:
-                dt = datetime.strptime(rec["Date"], "%b %d, %Y").date()
+                dt = datetime.strptime(date_str, "%b %d, %Y").date()
                 valid_dates.append(dt)
             except ValueError:
                 pass
@@ -142,12 +141,25 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
             print(f"Warning during cleanup of old events: {cleanup_err}")
 
         for rec in shift_records:
-            shift_code = str(rec["Shift Code"]).strip()
+            date_val = rec.get("Date")
+            if not date_val or isinstance(date_val, float):
+                continue
+            date_str = str(date_val).strip()
+            if not date_str or date_str.lower() == 'nan':
+                continue
+
+            shift_code = str(rec.get("Shift Code", "")).strip()
             if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
                 continue
                 
-            date_obj = datetime.strptime(rec["Date"], "%b %d, %Y").date()
-            start_t, end_t = parse_shift_times(rec["Time Range"])
+            try:
+                date_obj = datetime.strptime(date_str, "%b %d, %Y").date()
+            except ValueError:
+                continue
+
+            time_range_val = rec.get("Time Range", "")
+            time_range_str = str(time_range_val) if time_range_val is not None else ""
+            start_t, end_t = parse_shift_times(time_range_str)
             
             start_datetime = datetime.combine(date_obj, start_t)
             end_datetime = datetime.combine(date_obj, end_t)
