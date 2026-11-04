@@ -51,7 +51,7 @@ def parse_shift_times(time_str):
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
 def get_calendar_service():
-    """Builds the Google Calendar API service with robust private key sanitization."""
+    """Builds the Google Calendar API service with bulletproof private key cleaning."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
     if isinstance(raw_secret, dict):
@@ -67,21 +67,23 @@ def get_calendar_service():
                 cred_dict = json.loads(cleaned_secret)
             
     if "private_key" in cred_dict:
-        pk = cred_dict["private_key"]
-        if isinstance(pk, str):
-            pk = pk.replace('\\\\n', '\n').replace('\\n', '\n').replace('\\r', '')
-            
-        pk = pk.strip(' \t\n\r"\'')
-        lines = [line.strip() for line in pk.split('\n') if line.strip()]
+        pk = str(cred_dict["private_key"])
         
-        clean_lines = ["-----BEGIN PRIVATE KEY-----"]
-        for line in lines:
-            if "BEGIN PRIVATE KEY" in line or "END PRIVATE KEY" in line:
-                continue
-            clean_lines.append(line)
-        clean_lines.append("-----END PRIVATE KEY-----")
+        # Convert literal escaped newlines to real ones
+        pk = pk.replace("\\n", "\n").replace(r"\n", "\n").replace("\\r", "")
         
-        cred_dict["private_key"] = "\n".join(clean_lines) + "\n"
+        # Extract base64 content between headers if present
+        match = re.search(r'-----BEGIN PRIVATE KEY-----(.*?)-----END PRIVATE KEY-----', pk, re.DOTALL)
+        key_content = match.group(1) if match else pk
+        
+        # Filter out all invalid symbols, keeping only valid base64 characters
+        clean_chars = [char for char in key_content if char.isalnum() or char in "+/= \n\t"]
+        base64_cleaned = "".join(clean_chars)
+        base64_only = "".join(base64_cleaned.split())
+        
+        # Rebuild standard 64-character PEM format with real newlines
+        chunks = [base64_only[i:i+64] for i in range(0, len(base64_only), 64)]
+        cred_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(chunks) + "\n-----END PRIVATE KEY-----\n"
         
     creds = Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
     return build('calendar', 'v3', credentials=creds)
@@ -149,7 +151,7 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
                 continue
 
             shift_code = str(rec.get("Shift Code", "")).strip()
-            if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
+            if not shift_code or shift_code.upper() not in ["OFF", "VAC", "UNAVAIL"]:
                 continue
                 
             try:
