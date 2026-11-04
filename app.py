@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import ast
+import re
 from datetime import datetime, time, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -50,7 +51,7 @@ def parse_shift_times(time_str):
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
 def get_calendar_service():
-    """Builds the Google Calendar service with robust sanitization for TOML literal secrets."""
+    """Builds the Google Calendar API service with bulletproof private key regeneration."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
     if isinstance(raw_secret, dict):
@@ -67,22 +68,28 @@ def get_calendar_service():
             
     if "private_key" in cred_dict:
         pk = cred_dict["private_key"]
-        if isinstance(pk, str):
-            # Convert literal TOML escape sequences into true newlines
-            pk = pk.replace('\\\\n', '\n').replace('\\n', '\n').replace('\\r', '')
-            
-        # Rebuild clean PEM formatting
-        pk = pk.strip(' \t\n\r"\'')
-        lines = [line.strip() for line in pk.split('\n') if line.strip()]
         
-        clean_lines = ["-----BEGIN PRIVATE KEY-----"]
+        # Extract lines and filter out bad characters, extra dashes, or symbol 92 backslashes
+        lines = pk.split('\n')
+        clean_lines = []
+        in_key = False
         for line in lines:
-            if "BEGIN PRIVATE KEY" in line or "END PRIVATE KEY" in line:
+            if 'BEGIN PRIVATE KEY' in line:
+                in_key = True
                 continue
-            clean_lines.append(line)
-        clean_lines.append("-----END PRIVATE KEY-----")
-        
-        cred_dict["private_key"] = "\n".join(clean_lines) + "\n"
+            if 'END PRIVATE KEY' in line:
+                in_key = False
+                continue
+            if in_key:
+                # Keep only valid base64 characters, stripping backslashes and spaces completely
+                cleaned = re.sub(r'[^A-Za-z0-9+/=]', '', line)
+                if cleaned:
+                    clean_lines.append(cleaned)
+                    
+        base64_data = ''.join(clean_lines)
+        # Rebuild pristine 64-character PEM format
+        formatted_body = '\n'.join(base64_data[i:i+64] for i in range(0, len(base64_data), 64))
+        cred_dict["private_key"] = f"-----BEGIN PRIVATE KEY-----\n{formatted_body}\n-----END PRIVATE KEY-----\n"
         
     creds = Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
     return build('calendar', 'v3', credentials=creds)
