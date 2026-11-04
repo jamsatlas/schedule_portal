@@ -151,7 +151,10 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
                 continue
 
             shift_code = str(rec.get("Shift Code", "")).strip()
-            if not shift_code or shift_code.upper() not in ["OFF", "VAC", "UNAVAIL"]:
+            
+            # --- THE BUG FIX ---
+            # Replaced "not in" with "in" so valid shifts don't get skipped!
+            if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
                 continue
                 
             try:
