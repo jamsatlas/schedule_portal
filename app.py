@@ -50,7 +50,7 @@ def parse_shift_times(time_str):
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
 def get_calendar_service():
-    """Builds the Google Calendar API service with robust private key sanitization."""
+    """Builds the Google Calendar service with robust sanitization for TOML literal secrets."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
     if isinstance(raw_secret, dict):
@@ -67,15 +67,22 @@ def get_calendar_service():
             
     if "private_key" in cred_dict:
         pk = cred_dict["private_key"]
-        # Thoroughly clean any escaped or malformed newline sequences
-        pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
-        # Ensure header and footer have exact newline formatting
-        pk = pk.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
-        pk = pk.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
-        # Clean up any accidental double newlines created during replacement
-        while "\n\n" in pk:
-            pk = pk.replace("\n\n", "\n")
-        cred_dict["private_key"] = pk.strip() + "\n"
+        if isinstance(pk, str):
+            # Convert literal TOML escape sequences into true newlines
+            pk = pk.replace('\\\\n', '\n').replace('\\n', '\n').replace('\\r', '')
+            
+        # Rebuild clean PEM formatting
+        pk = pk.strip(' \t\n\r"\'')
+        lines = [line.strip() for line in pk.split('\n') if line.strip()]
+        
+        clean_lines = ["-----BEGIN PRIVATE KEY-----"]
+        for line in lines:
+            if "BEGIN PRIVATE KEY" in line or "END PRIVATE KEY" in line:
+                continue
+            clean_lines.append(line)
+        clean_lines.append("-----END PRIVATE KEY-----")
+        
+        cred_dict["private_key"] = "\n".join(clean_lines) + "\n"
         
     creds = Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
     return build('calendar', 'v3', credentials=creds)
