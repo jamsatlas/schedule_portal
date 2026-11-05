@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import ast
 import re
+import calendar
 from datetime import datetime, time, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -21,7 +22,6 @@ try:
     CALENDAR_ID_1 = st.secrets["calendars"]["calendar_id_1"]
     CALENDAR_ID_2 = st.secrets["calendars"]["calendar_id_2"]
     
-    # Safely get the Google Sheet URL if it exists
     SHEET_URL = ""
     if "google_sheets" in st.secrets and "sheet_url" in st.secrets["google_sheets"]:
         SHEET_URL = st.secrets["google_sheets"]["sheet_url"]
@@ -30,21 +30,18 @@ except KeyError:
     st.error("Missing credentials or IDs in Streamlit secrets.")
     st.stop()
 
-# We need both Calendar and Sheets scopes now
 SCOPES = [
     'https://www.googleapis.com/auth/calendar',
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
 ]
 
-# --- SESSION STATE INITIALIZATION ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "current_user" not in st.session_state:
     st.session_state["current_user"] = None
 
 def parse_shift_times(time_str):
-    """Parses shift time ranges into datetime.time objects."""
     if not time_str or not isinstance(time_str, str) or "-" not in time_str:
         return time(9, 0), time(17, 0)
     
@@ -62,14 +59,8 @@ def parse_shift_times(time_str):
         
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
-
-# ==========================================
-# UNIFIED CREDENTIALS & API SERVICES
-# ==========================================
 def get_google_credentials():
-    """Builds Google credentials with bulletproof private key cleaning for BOTH APIs."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
-    
     if isinstance(raw_secret, dict):
         cred_dict = dict(raw_secret)
     else:
@@ -98,21 +89,14 @@ def get_google_credentials():
     return Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
 
 def get_calendar_service():
-    """Builds the Google Calendar API service."""
     creds = get_google_credentials()
     return build('calendar', 'v3', credentials=creds)
 
 def get_sheets_client():
-    """Builds the gspread Google Sheets client."""
     creds = get_google_credentials()
     return gspread.authorize(creds)
 
-
-# ==========================================
-# EXPORT FUNCTIONS
-# ==========================================
 def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
-    """Pushes shifts to Google Calendars (Clears old shifts in range to prevent duplicates)."""
     service = get_calendar_service()
     if not shift_records: return 0
 
@@ -176,38 +160,94 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
 
     return len(valid_dates)
 
-def export_shifts_to_sheets(shift_records):
-    """Appends validated shifts directly to the team Google Sheet."""
+
+def build_yearly_headers(year):
+    """Builds the 365-column layout for Row 1 (Months) and Row 2 (Days) for a given year."""
+    row1 = [""]
+    row2 = ["Employee Name"]
+    for month in range(1, 13):
+        month_name = calendar.month_name[month]
+        num_days = calendar.monthrange(year, month)[1]
+        
+        # Place the month name on the 1st of the month, leave remaining days blank
+        row1.append(f"{month_name} {year}")
+        row1.extend([""] * (num_days - 1))
+        
+        # Number the days for the month
+        for day in range(1, num_days + 1):
+            row2.append(str(day))
+            
+    return row1, row2
+
+
+def export_shifts_to_sheets(shift_records, display_name):
+    """Appends shifts dynamically to continuous yearly tabs (1 column per day)."""
     if not SHEET_URL:
         raise ValueError("Missing 'sheet_url'. Please add your Google Sheet link to Streamlit secrets under [google_sheets].")
         
     client = get_sheets_client()
-    sheet = client.open_by_url(SHEET_URL).sheet1
+    spreadsheet = client.open_by_url(SHEET_URL)
     
-    rows_to_add = []
+    # 1. Group all valid uploaded shifts by their Year
+    shifts_by_year = {}
     for rec in shift_records:
         date_val = rec.get("Date")
-        if not date_val or isinstance(date_val, float): continue
-        date_str = str(date_val).strip()
-        if not date_str or date_str.lower() == 'nan': continue
-
         shift_code = str(rec.get("Shift Code", "")).strip()
-        if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]: continue
-            
-        time_range = str(rec.get("Time Range", ""))
-        if time_range.lower() == 'nan': time_range = ""
-            
-        rows_to_add.append([
-            date_str, 
-            str(rec.get("Day", "")), 
-            shift_code, 
-            time_range
-        ])
         
-    if rows_to_add:
-        sheet.append_rows(rows_to_add)
+        if not date_val or isinstance(date_val, float) or not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
+            continue
+            
+        try:
+            date_obj = datetime.strptime(str(date_val).strip(), "%b %d, %Y").date()
+            year = date_obj.year
+            day_of_year = date_obj.timetuple().tm_yday  # e.g., Jan 1st is Day 1, Dec 31 is Day 365
+            
+            if year not in shifts_by_year:
+                shifts_by_year[year] = []
+            shifts_by_year[year].append((day_of_year, shift_code))
+        except ValueError:
+            continue
+
+    total_shifts_added = 0
+    
+    # 2. Process the updates, creating new tabs for new years if necessary
+    for year, shifts in shifts_by_year.items():
+        year_str = str(year)
+        days_in_year = 366 if calendar.isleap(year) else 365
         
-    return len(rows_to_add)
+        try:
+            worksheet = spreadsheet.worksheet(year_str)
+        except gspread.exceptions.WorksheetNotFound:
+            # Create a brand new tab for the year at the bottom
+            worksheet = spreadsheet.add_worksheet(title=year_str, rows="50", cols=str(days_in_year + 5))
+            row1, row2 = build_yearly_headers(year)
+            worksheet.update('A1', [row1, row2])
+            
+        # 3. Find the user's row, or create a new one
+        names = worksheet.col_values(1)
+        if display_name in names:
+            row_idx = names.index(display_name) + 1
+        else:
+            row_idx = len(names) + 1
+            if row_idx <= 2: row_idx = 3  # Ensure we don't overwrite headers
+            worksheet.update_cell(row_idx, 1, display_name)
+            
+        # 4. Fetch their existing row data, update specific days, and write back
+        row_data = worksheet.row_values(row_idx)
+        
+        # Ensure the row has enough blank columns up to the end of the year
+        if len(row_data) < days_in_year + 1:
+            row_data.extend([""] * ((days_in_year + 1) - len(row_data)))
+            
+        row_data[0] = display_name
+        
+        for day_of_year, shift_code in shifts:
+            row_data[day_of_year] = shift_code  # Place the shift code in the exact column index matching the day of year
+            total_shifts_added += 1
+            
+        worksheet.update(f'A{row_idx}', [row_data])
+        
+    return total_shifts_added
 
 
 # ==========================================
@@ -284,7 +324,6 @@ else:
             # 3. EXPORT CONTROLS (ROLE-BASED)
             # ==========================================
             
-            # --- JAMES WORKFLOW (CALENDAR) ---
             if st.session_state["current_user"] == "james1209":
                 st.markdown("### 📅 Google Calendar Export")
                 
@@ -296,14 +335,18 @@ else:
                         except Exception as sync_err:
                             st.error(f"Google Calendar Sync Error: {sync_err}")
             
-            # --- COWORKER WORKFLOW (SHEETS) ---
             elif st.session_state["current_user"] == "admin26":
                 st.markdown("### 📊 Google Sheets Export")
                 
+                display_name = st.text_input("Enter your name for the schedule:", placeholder="e.g., James Rampersadsingh")
+                
                 if st.button("🚀 Push Shifts to Team Google Sheet", type="primary", use_container_width=True):
-                    with st.spinner("Syncing schedule data to the Team Google Sheet..."):
-                        try:
-                            count = export_shifts_to_sheets(reconstructed_records)
-                            st.success(f"Successfully appended {count} shifts to the Team Google Sheet!")
-                        except Exception as sync_err:
-                            st.error(f"Google Sheets Sync Error: {sync_err}")
+                    if not display_name.strip():
+                        st.warning("Please enter a name before exporting.")
+                    else:
+                        with st.spinner("Syncing schedule data to the Team Google Sheet..."):
+                            try:
+                                count = export_shifts_to_sheets(reconstructed_records, display_name)
+                                st.success(f"Successfully appended {count} shifts horizontally to the Team Google Sheet!")
+                            except Exception as sync_err:
+                                st.error(f"Google Sheets Sync Error: {sync_err}")
