@@ -6,12 +6,13 @@ import re
 from datetime import datetime, time, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+import gspread
 import schedule_parser
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="UKG Schedule Portal", layout="centered")
 
-# --- CREDENTIALS & CALENDAR CONFIG ---
+# --- CREDENTIALS & CONFIG ---
 try:
     USERS = {
         "admin26": st.secrets["credentials"]["COWORKER_PASSWORD"],
@@ -19,11 +20,22 @@ try:
     }
     CALENDAR_ID_1 = st.secrets["calendars"]["calendar_id_1"]
     CALENDAR_ID_2 = st.secrets["calendars"]["calendar_id_2"]
+    
+    # Safely get the Google Sheet URL if it exists
+    SHEET_URL = ""
+    if "google_sheets" in st.secrets and "sheet_url" in st.secrets["google_sheets"]:
+        SHEET_URL = st.secrets["google_sheets"]["sheet_url"]
+        
 except KeyError:
-    st.error("Missing credentials or calendar IDs in Streamlit secrets.")
+    st.error("Missing credentials or IDs in Streamlit secrets.")
     st.stop()
 
-SCOPES = ['https://www.googleapis.com/auth/calendar']
+# We need both Calendar and Sheets scopes now
+SCOPES = [
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
 
 # --- SESSION STATE INITIALIZATION ---
 if "authenticated" not in st.session_state:
@@ -50,12 +62,16 @@ def parse_shift_times(time_str):
         
     return parse_single_time(start_raw), parse_single_time(end_raw)
 
-def get_calendar_service():
-    """Builds the Google Calendar API service with bulletproof private key cleaning."""
+
+# ==========================================
+# UNIFIED CREDENTIALS & API SERVICES
+# ==========================================
+def get_google_credentials():
+    """Builds Google credentials with bulletproof private key cleaning for BOTH APIs."""
     raw_secret = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     
     if isinstance(raw_secret, dict):
-        cred_dict = raw_secret
+        cred_dict = dict(raw_secret)
     else:
         try:
             cred_dict = json.loads(raw_secret)
@@ -65,60 +81,59 @@ def get_calendar_service():
             except Exception:
                 cleaned_secret = raw_secret.replace('\n', '\\n').replace('\r', '')
                 cred_dict = json.loads(cleaned_secret)
-            
+        
     if "private_key" in cred_dict:
         pk = str(cred_dict["private_key"])
-        
-        # Convert literal escaped newlines to real ones
         pk = pk.replace("\\n", "\n").replace(r"\n", "\n").replace("\\r", "")
-        
-        # Extract base64 content between headers if present
         match = re.search(r'-----BEGIN PRIVATE KEY-----(.*?)-----END PRIVATE KEY-----', pk, re.DOTALL)
         key_content = match.group(1) if match else pk
         
-        # Filter out all invalid symbols, keeping only valid base64 characters
         clean_chars = [char for char in key_content if char.isalnum() or char in "+/= \n\t"]
         base64_cleaned = "".join(clean_chars)
         base64_only = "".join(base64_cleaned.split())
         
-        # Rebuild standard 64-character PEM format with real newlines
         chunks = [base64_only[i:i+64] for i in range(0, len(base64_only), 64)]
         cred_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(chunks) + "\n-----END PRIVATE KEY-----\n"
         
-    creds = Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
+    return Credentials.from_service_account_info(cred_dict, scopes=SCOPES)
+
+def get_calendar_service():
+    """Builds the Google Calendar API service."""
+    creds = get_google_credentials()
     return build('calendar', 'v3', credentials=creds)
 
+def get_sheets_client():
+    """Builds the gspread Google Sheets client."""
+    creds = get_google_credentials()
+    return gspread.authorize(creds)
+
+
+# ==========================================
+# EXPORT FUNCTIONS
+# ==========================================
 def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
-    """Pushes parsed shifts directly into configured Google Calendars, 
-    clearing out old shift events in that date range first to prevent duplicates."""
+    """Pushes shifts to Google Calendars (Clears old shifts in range to prevent duplicates)."""
     service = get_calendar_service()
-    
-    if not shift_records:
-        return 0
+    if not shift_records: return 0
 
     valid_dates = []
     for rec in shift_records:
         date_val = rec.get("Date")
-        if not date_val or isinstance(date_val, float):
-            continue
+        if not date_val or isinstance(date_val, float): continue
         date_str = str(date_val).strip()
-        if not date_str or date_str.lower() == 'nan':
-            continue
+        if not date_str or date_str.lower() == 'nan': continue
 
         shift_code = str(rec.get("Shift Code", "")).strip()
         if shift_code and shift_code.upper() not in ["OFF", "VAC", "UNAVAIL"]:
             try:
-                dt = datetime.strptime(date_str, "%b %d, %Y").date()
-                valid_dates.append(dt)
+                valid_dates.append(datetime.strptime(date_str, "%b %d, %Y").date())
             except ValueError:
                 pass
                 
-    if not valid_dates:
-        return 0
+    if not valid_dates: return 0
         
     min_date = min(valid_dates)
     max_date = max(valid_dates)
-    
     time_min = datetime.combine(min_date, time.min).isoformat() + 'Z'
     time_max = datetime.combine(max_date + timedelta(days=1), time.max).isoformat() + 'Z'
 
@@ -126,69 +141,73 @@ def add_shifts_to_google_calendars(shift_records, target_calendar_ids):
     
     for cal_id in target_calendar_ids:
         try:
-            events_result = service.events().list(
-                calendarId=cal_id,
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-            
-            existing_events = events_result.get('items', [])
-            for event in existing_events:
-                summary = event.get('summary', '')
-                if summary.startswith("Work Shift:"):
+            events_result = service.events().list(calendarId=cal_id, timeMin=time_min, timeMax=time_max, singleEvents=True, orderBy='startTime').execute()
+            for event in events_result.get('items', []):
+                if event.get('summary', '').startswith("Work Shift:"):
                     service.events().delete(calendarId=cal_id, eventId=event['id']).execute()
         except Exception as cleanup_err:
             print(f"Warning during cleanup of old events: {cleanup_err}")
 
         for rec in shift_records:
-            date_val = rec.get("Date")
-            if not date_val or isinstance(date_val, float):
-                continue
-            date_str = str(date_val).strip()
-            if not date_str or date_str.lower() == 'nan':
-                continue
-
-            shift_code = str(rec.get("Shift Code", "")).strip()
-            
-            # --- THE BUG FIX ---
-            # Replaced "not in" with "in" so valid shifts don't get skipped!
-            if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
+            date_val, shift_code = rec.get("Date"), str(rec.get("Shift Code", "")).strip()
+            if not date_val or isinstance(date_val, float) or not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]:
                 continue
                 
             try:
-                date_obj = datetime.strptime(date_str, "%b %d, %Y").date()
+                date_obj = datetime.strptime(str(date_val).strip(), "%b %d, %Y").date()
             except ValueError:
                 continue
 
-            time_range_val = rec.get("Time Range", "")
-            time_range_str = str(time_range_val) if time_range_val is not None else ""
+            time_range_str = str(rec.get("Time Range", "")) if rec.get("Time Range") is not None else ""
             start_t, end_t = parse_shift_times(time_range_str)
-            
             start_datetime = datetime.combine(date_obj, start_t)
             end_datetime = datetime.combine(date_obj, end_t)
             
-            if end_datetime <= start_datetime:
-                end_datetime += timedelta(days=1)
+            if end_datetime <= start_datetime: end_datetime += timedelta(days=1)
                 
             event_body = {
                 'summary': f"Work Shift: {shift_code}",
                 'description': f"UKG Shift Code: {shift_code}",
-                'start': {
-                    'dateTime': start_datetime.isoformat(),
-                    'timeZone': 'America/Toronto',
-                },
-                'end': {
-                    'dateTime': end_datetime.isoformat(),
-                    'timeZone': 'America/Toronto',
-                },
+                'start': {'dateTime': start_datetime.isoformat(), 'timeZone': 'America/Toronto'},
+                'end': {'dateTime': end_datetime.isoformat(), 'timeZone': 'America/Toronto'},
             }
-
             service.events().insert(calendarId=cal_id, body=event_body).execute()
             success_count += 1
 
     return len(valid_dates)
+
+def export_shifts_to_sheets(shift_records):
+    """Appends validated shifts directly to the team Google Sheet."""
+    if not SHEET_URL:
+        raise ValueError("Missing 'sheet_url'. Please add your Google Sheet link to Streamlit secrets under [google_sheets].")
+        
+    client = get_sheets_client()
+    sheet = client.open_by_url(SHEET_URL).sheet1
+    
+    rows_to_add = []
+    for rec in shift_records:
+        date_val = rec.get("Date")
+        if not date_val or isinstance(date_val, float): continue
+        date_str = str(date_val).strip()
+        if not date_str or date_str.lower() == 'nan': continue
+
+        shift_code = str(rec.get("Shift Code", "")).strip()
+        if not shift_code or shift_code.upper() in ["OFF", "VAC", "UNAVAIL"]: continue
+            
+        time_range = str(rec.get("Time Range", ""))
+        if time_range.lower() == 'nan': time_range = ""
+            
+        rows_to_add.append([
+            date_str, 
+            str(rec.get("Day", "")), 
+            shift_code, 
+            time_range
+        ])
+        
+    if rows_to_add:
+        sheet.append_rows(rows_to_add)
+        
+    return len(rows_to_add)
 
 
 # ==========================================
@@ -264,19 +283,27 @@ else:
             # ==========================================
             # 3. EXPORT CONTROLS (ROLE-BASED)
             # ==========================================
+            
+            # --- JAMES WORKFLOW (CALENDAR) ---
             if st.session_state["current_user"] == "james1209":
                 st.markdown("### 📅 Google Calendar Export")
                 
                 if st.button("🚀 Push Shifts directly to My 2 Google Calendars", type="primary", use_container_width=True):
                     with st.spinner("Syncing events to your configured Google Calendars..."):
                         try:
-                            count = add_shifts_to_google_calendars(
-                                reconstructed_records, 
-                                [CALENDAR_ID_1, CALENDAR_ID_2]
-                            )
+                            count = add_shifts_to_google_calendars(reconstructed_records, [CALENDAR_ID_1, CALENDAR_ID_2])
                             st.success(f"Successfully exported shifts! (Replaced old shifts in date range to prevent duplicates).")
                         except Exception as sync_err:
                             st.error(f"Google Calendar Sync Error: {sync_err}")
             
+            # --- COWORKER WORKFLOW (SHEETS) ---
             elif st.session_state["current_user"] == "admin26":
-                st.info("ℹ️ Schedule preview loaded. External calendar export is restricted.")
+                st.markdown("### 📊 Google Sheets Export")
+                
+                if st.button("🚀 Push Shifts to Team Google Sheet", type="primary", use_container_width=True):
+                    with st.spinner("Syncing schedule data to the Team Google Sheet..."):
+                        try:
+                            count = export_shifts_to_sheets(reconstructed_records)
+                            st.success(f"Successfully appended {count} shifts to the Team Google Sheet!")
+                        except Exception as sync_err:
+                            st.error(f"Google Sheets Sync Error: {sync_err}")
